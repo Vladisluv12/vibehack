@@ -33,6 +33,8 @@ MAX_VAULT = 100_000_000
 KINDS = {"project", "research", "source", "decision", "session", "concept", "note"}
 REVIEWS = {"unreviewed", "proposed", "reviewed"}
 SPACES = {"human", "agent"}
+# Question words that make an OR query match everything.
+STOPWORDS = set("как что это для или при где кто чем так его она они все был быть если чтобы когда какой какие какая нет над под без про the and for with what how why".split())
 # Who wrote a note: explicit `space` metadata, else agent drafts carry an `agent:` source.
 SPACE_SQL = ("(CASE WHEN json_extract(n.meta,'$.space') IN ('human','agent') THEN json_extract(n.meta,'$.space') "
              "WHEN json_extract(n.meta,'$.source') LIKE 'agent:%' THEN 'agent' ELSE 'human' END)")
@@ -329,7 +331,7 @@ class Brain:
                             warnings.append({"path": rel, "link": target, "error": "ambiguous" if matches else "unresolved"})
         return {"notes": len(records), "links": self.db.execute('SELECT count(*) FROM links').fetchone()[0], "warnings": warnings[:100], "warning_count": len(warnings)}
 
-    def list(self, query="", kind="", offset=0, limit=100, space="", review="", tag=""):
+    def list(self, query="", kind="", offset=0, limit=100, space="", review="", tag="", match_any=False):
         if kind and kind not in KINDS:
             raise ValueError("Unknown note kind")
         if space and space not in SPACES:
@@ -344,7 +346,10 @@ class Brain:
         where = (f"(?='' OR n.kind=?) AND (?='' OR {SPACE_SQL}=?) AND (?='' OR n.review=?) "
                  "AND (?='' OR n.id IN (SELECT note FROM tags WHERE tag=?))")
         tokens = re.findall(r"\w+", query[:300], re.UNICODE)
-        match = " AND ".join('"'+t+'"*' for t in tokens[:12])
+        if match_any:
+            # Natural-language questions: any meaningful word may match, BM25 ranks.
+            tokens = [t for t in tokens if len(t) >= 3 and t.lower() not in STOPWORDS] or tokens
+        match = (" OR " if match_any else " AND ").join('"'+t+'"*' for t in tokens[:12])
         if tokens:
             total = self.db.execute("SELECT count(*) FROM notes n WHERE " + where + " AND n.id IN (SELECT id FROM search WHERE search MATCH ?)", (*args, match)).fetchone()[0]
             # FTS5 rank defaults to BM25; lower values are better. Keep the

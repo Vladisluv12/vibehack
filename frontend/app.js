@@ -95,7 +95,7 @@ function drawNode(node,ctx,scale){
   ctx.globalAlpha=1;
 }
 // Floating panels the labels must not run under; re-measured at most twice a second.
-const HUD=['.hud-left','.command','.actions','.kpis','#inspector','#drawer','.legend','.toolbar','#activity-panel'];
+const HUD=['.hud-left','.command','.actions','.kpis','#inspector','#drawer','#chat','.chat-fab','.legend','.toolbar','#activity-panel'];
 let hudBoxes=[],hudAt=0;
 function hud(){const now=performance.now();if(now-hudAt>500){hudAt=now;hudBoxes=HUD.map(s=>document.querySelector(s)).filter(e=>e&&!e.hidden&&!e.closest('[hidden]')).map(e=>{const r=e.getBoundingClientRect();return [r.left-6,r.top-6,r.right+6,r.bottom+6]}).filter(b=>b[2]>b[0])}return hudBoxes}
 // Screen-space labels: hubs large and bright, the rest smaller and fainter; no overlaps.
@@ -194,10 +194,11 @@ async function loadSemantic(){
 
 // ── Inspector ─────────────────────────────────────────────────────────────
 function resolveWiki(target){const key=target.trim().toLowerCase();for(const n of byId.values())if(n.id===key||n.title.toLowerCase()===key||n.path?.replace(/\.md$/,'').toLowerCase()===key)return n.id;for(const [id,title] of knownTitles)if(id===key||title.toLowerCase()===key)return id;return null}
-function renderInline(tokens){
+function renderInline(tokens,cite=null){
   const out=document.createDocumentFragment();
   for(const tok of tokens){
-    if(tok.t==='text')out.append(tok.v);
+    if(tok.t==='text'&&cite){for(const part of tok.v.split(/(\[\d{1,2}\])/)){const n=part.match(/^\[(\d{1,2})\]$/);out.append(n&&cite(Number(n[1]))||part)}}
+    else if(tok.t==='text')out.append(tok.v);
     else if(tok.t==='code')out.append(el('code',tok.v));
     else if(tok.t==='strong')out.append(el('strong',tok.v));
     else if(tok.t==='em')out.append(el('em',tok.v));
@@ -210,7 +211,7 @@ function renderMarkdown(text){
   const box=$('content');box.replaceChildren();
   for(const block of parse(text.split(/\n## Relations\s*\n/)[0])){
     if(block.type==='code'){const pre=el('pre');pre.append(el('code',block.text));box.append(pre)}
-    else if(block.type==='ul'||block.type==='ol'){const list=el(block.type);for(const item of block.items){const li=el('li');li.append(renderInline(item));list.append(li)}box.append(list)}
+    else if(block.type==='ul'||block.type==='ol'){const list=el(block.type);if(block.start>1)list.start=block.start;for(const item of block.items){const li=el('li');li.append(renderInline(item));list.append(li)}box.append(list)}
     else{const node=el(block.type==='h'?'h4':'p');node.append(renderInline(block.inline));box.append(node)}
   }
 }
@@ -221,6 +222,7 @@ async function openNote(id){
     const note=await api('brain/note?id='+encodeURIComponent(id));if(selection!==request)return;
     selected=id;currentNote=note;history.replaceState(null,'','#note='+id);
     for(const r of note.relations){if(r.source_title)knownTitles.set(r.source,r.source_title);if(r.target_title)knownTitles.set(r.target,r.target_title)}
+    if(chatOpen())setChat(false);
     $('inspector').hidden=false;$('editing').hidden=true;$('content').hidden=false;
     $('note-kind').textContent=labels[note.kind];$('note-kind').style.color=kindColor[note.kind];$('note-title').textContent=note.title;
     $('review').textContent=reviews[note.review];$('review').className='review '+note.review;$('note-space').textContent=note.space==='agent'?'Агент':'Человек';$('note-space').className='space-badge '+note.space;
@@ -298,18 +300,30 @@ for(const name of ['human','agent','all'])$('space-'+name).onclick=()=>setSpace(
 const queryParams=q=>q.startsWith('#')?{tag:q.slice(1)}:{q};
 async function searchTag(tag){$('search').value='#'+tag;if(!drawerOpen())setDrawer(true);await search();hideResults()}
 
+// Search mode: BM25 stays the default; semantic and hybrid use the embedding settings.
+let searchMode='bm25';
+const MODE_LABELS={bm25:'BM25',semantic:'По смыслу',hybrid:'Гибрид'};
+function showSearchMode(){$('search-mode').textContent=MODE_LABELS[searchMode];$('search-mode').className='mode-pill '+searchMode;for(const b of document.querySelectorAll('.results-modes button'))b.setAttribute('aria-pressed',String(b.dataset.mode===searchMode))}
+async function setSearchMode(mode){searchMode=mode;showSearchMode();try{await api('settings',{search:{mode}})}catch(e){notify(e.message,true)}if($('search').value.trim())search()}
+$('search-mode').onclick=()=>setSearchMode({bm25:'semantic',semantic:'hybrid',hybrid:'bm25'}[searchMode]);
+for(const b of document.querySelectorAll('.results-modes button'))b.onmousedown=e=>{e.preventDefault();setSearchMode(b.dataset.mode)};
+const searchApi=(q,limit)=>q.startsWith('#')||searchMode==='bm25'
+  ?api('brain/notes?'+new URLSearchParams({...queryParams(q),limit,...spaceQuery()}))
+  :api('brain/search?'+new URLSearchParams({q,mode:searchMode,limit:Math.min(limit,50),...spaceQuery()}));
+
 // ── Command search: results list plus highlighted matches on the graph ────
 let searchTimer,searchSerial=0,results=[],active=-1;
 function renderResults(){
-  const box=$('results');box.replaceChildren();
+  const box=$('results-list');box.replaceChildren();showSearchMode();
   results.slice(0,8).forEach((note,i)=>{
     const b=el('button',undefined,'result');b.setAttribute('role','option');b.setAttribute('aria-selected',String(i===active));b.style.setProperty('--dot',colorOf(note.id));
     const excerpt=(note.excerpt||'').split('## Relations')[0].replace(/\[\[[0-9a-f]{32}\]\]/g,'').replace(/\s+/g,' ').trim();
-    b.append(el('strong',note.title),el('small',excerpt&&excerpt!=='…'?excerpt:`${labels[note.kind]} · ${reviewShort[note.review]}`));
+    const title=el('strong',note.title);if(searchMode==='semantic'&&note.score!==undefined)title.append(el('span',`≈ ${Math.round(note.score*100)}%`,'score'));
+    b.append(title,el('small',excerpt&&excerpt!=='…'?excerpt:`${labels[note.kind]} · ${reviewShort[note.review]}`));
     b.onmousedown=e=>{e.preventDefault();pick(note.id)};box.append(b);
   });
-  if(!results.length)box.append(el('p','Ничего не найдено. Попробуйте другое слово.','empty'));
-  box.hidden=false;$('search').setAttribute('aria-expanded','true');
+  if(!results.length)box.append(el('p',searchMode==='bm25'?'Ничего не найдено. Попробуйте другое слово или поиск по смыслу.':'Ничего не найдено.','empty'));
+  $('results').hidden=false;$('search').setAttribute('aria-expanded','true');
 }
 function hideResults(){$('results').hidden=true;$('search').setAttribute('aria-expanded','false')}
 function pick(id){hideResults();openNote(id)}
@@ -317,7 +331,7 @@ async function search(){
   const q=$('search').value.trim(),serial=++searchSerial;
   if(drawerOpen())loadCatalog();
   if(!q||q==='#'){results=[];searchMatches=null;hideResults();refreshLit();status();return}
-  try{const found=await api('brain/notes?'+new URLSearchParams({...queryParams(q),limit:500,...spaceQuery()}));if(serial!==searchSerial)return;results=found.items;active=results.length?0:-1;searchMatches=new Set(results.map(n=>n.id));renderResults();refreshLit();status()}catch(e){notify(e.message,true)}
+  try{const found=await searchApi(q,500);if(serial!==searchSerial)return;results=found.items;active=results.length?0:-1;searchMatches=new Set(results.map(n=>n.id));renderResults();refreshLit();status()}catch(e){notify(e.message,true)}
 }
 $('search').addEventListener('input',()=>{clearTimeout(searchTimer);searchTimer=setTimeout(search,180)});
 $('search').addEventListener('focus',()=>{if(results.length&&$('search').value.trim())renderResults()});
@@ -331,7 +345,7 @@ $('search').addEventListener('keydown',e=>{
 });
 document.addEventListener('keydown',e=>{
   if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='k'||e.key==='/'&&!/INPUT|TEXTAREA/.test(document.activeElement.tagName)){e.preventDefault();$('search').focus();$('search').select();return}
-  if(e.key==='Escape'&&!$('create-dialog').open&&!$('github-dialog').open&&$('editing').hidden&&document.activeElement!==$('search')){if(selected)closeNote();else if(drawerOpen())setDrawer(false)}
+  if(e.key==='Escape'&&!$('create-dialog').open&&!$('github-dialog').open&&!$('settings-dialog').open&&$('editing').hidden&&document.activeElement!==$('search')){if(chatOpen())setChat(false);else if(selected)closeNote();else if(drawerOpen())setDrawer(false)}
 });
 
 // ── Drawer: catalog of notes; follows the top search when it is active ────
@@ -368,7 +382,9 @@ function catalogSelected(){for(const b of $('catalog').querySelectorAll('.catalo
 async function loadCatalog(append=false){
   const serial=++catalogSerial,q=$('search').value.trim()==='#'?'':$('search').value.trim();
   try{
-    const result=await api('brain/notes?'+new URLSearchParams({...queryParams(q),kind:catalogKind,review:catalogReview,offset:append?catalogNext:0,limit:50,...spaceQuery()}));if(serial!==catalogSerial)return;
+    const semanticList=q&&!q.startsWith('#')&&searchMode!=='bm25';
+    let result=semanticList?await searchApi(q,50):await api('brain/notes?'+new URLSearchParams({...queryParams(q),kind:catalogKind,review:catalogReview,offset:append?catalogNext:0,limit:50,...spaceQuery()}));if(serial!==catalogSerial)return;
+    if(semanticList){const items=result.items.filter(n=>(!catalogKind||n.kind===catalogKind)&&(!catalogReview||n.review===catalogReview));result={items,total:items.length,next:null}}
     if(!append)$('catalog').replaceChildren();
     for(const note of result.items){
       const b=el('button',undefined,'catalog-item');b.dataset.id=note.id;b.style.setProperty('--dot',colorOf(note.id));
@@ -378,7 +394,7 @@ async function loadCatalog(append=false){
     }
     if(!result.total)$('catalog').append(el('p',q?'По этому запросу заметок нет.':'Заметок с такими фильтрами нет.','hint'));
     catalogNext=result.next;$('more').hidden=catalogNext===null;$('catalog-count').textContent=result.total;
-    $('catalog-query').hidden=!q;$('catalog-query').textContent=q.startsWith('#')?`Заметки с тегом ${q}`:`Результаты поиска «${q}»`;catalogSelected();renderTagFilter();
+    $('catalog-query').hidden=!q;$('catalog-query').textContent=q.startsWith('#')?`Заметки с тегом ${q}`:`${MODE_LABELS[searchMode]}: «${q}»`;catalogSelected();renderTagFilter();
   }catch(e){notify(e.message,true)}
 }
 $('drawer-new').onclick=()=>$('create-dialog').showModal();
@@ -406,21 +422,88 @@ function providerFields(){const p=$('set-provider').value;$('endpoint-fields').h
 function thresholdLabel(){const auto=$('set-auto').checked;$('set-threshold').disabled=auto;$('threshold-value').textContent=auto?(semantic.auto&&semantic.threshold?`сейчас ${semantic.threshold.toFixed(2)}`:'авто'):Number($('set-threshold').value).toFixed(2)}
 function fillSettings(values){
   const e=values.embeddings,s=values.semantic,f=$('settings-form');
-  f.provider.value=e.provider;f.url.value=e.url;f.model.value=e.model;f.document_prefix.value=e.document_prefix;f.api_key.value='';
+  f.provider.value=e.provider;f.url.value=e.url;f.model.value=e.model;f.document_prefix.value=e.document_prefix;f.query_prefix.value=e.query_prefix;f.api_key.value='';
+  const c=values.chat;f.chat_provider.value=c.provider;f.chat_url.value=c.url;f.chat_model.value=c.model;f.chat_notes.value=c.context_notes;f.chat_key.value='';
+  f.chat_key.placeholder=c.api_key_set?'Ключ сохранён — оставьте пустым, чтобы не менять':'Не нужен для Ollama';
+  for(const r of f.querySelectorAll('[name=search_mode]'))r.checked=r.value===values.search.mode;
   f.api_key.placeholder=e.api_key_set?'Ключ сохранён — оставьте пустым, чтобы не менять':'Не нужен для локальных серверов';
   for(const box of f.querySelectorAll('[name=space]'))box.checked=s.spaces.includes(box.value);
   $('set-auto').checked=s.threshold==='auto';f.threshold.value=s.threshold==='auto'?(semantic.threshold||.5):s.threshold;f.top_k.value=s.top_k;providerFields();thresholdLabel();
 }
 function settingsPayload(){
-  const f=$('settings-form'),e={provider:f.provider.value,url:f.url.value,model:f.model.value,document_prefix:f.document_prefix.value};
+  const f=$('settings-form'),e={provider:f.provider.value,url:f.url.value,model:f.model.value,document_prefix:f.document_prefix.value,query_prefix:f.query_prefix.value};
   if(f.api_key.value)e.api_key=f.api_key.value;
-  return {embeddings:e,semantic:{spaces:[...f.querySelectorAll('[name=space]:checked')].map(b=>b.value),threshold:$('set-auto').checked?'auto':Number(f.threshold.value),top_k:Number(f.top_k.value)}};
+  const chat={provider:f.chat_provider.value,url:f.chat_url.value,model:f.chat_model.value,context_notes:Number(f.chat_notes.value)};if(f.chat_key.value)chat.api_key=f.chat_key.value;
+  const mode=f.querySelector('[name=search_mode]:checked')?.value||searchMode;
+  return {embeddings:e,chat,search:{mode},semantic:{spaces:[...f.querySelectorAll('[name=space]:checked')].map(b=>b.value),threshold:$('set-auto').checked?'auto':Number(f.threshold.value),top_k:Number(f.top_k.value)}};
 }
-$('settings').onclick=async()=>{try{fillSettings(await api('settings'));settingsStatus('');$('settings-dialog').showModal()}catch(e){notify(e.message,true)}};
+$('settings').onclick=async()=>{try{applySettings(await api('settings'));settingsStatus('');$('settings-dialog').showModal()}catch(e){notify(e.message,true)}};
 $('close-settings').onclick=()=>$('settings-dialog').close();$('set-provider').onchange=providerFields;$('set-threshold').oninput=thresholdLabel;$('set-auto').onchange=thresholdLabel;
-$('settings-test').onclick=()=>run($('settings-test'),async()=>{settingsStatus('Сохраняю и запрашиваю тестовый вектор…');try{fillSettings(await api('settings',settingsPayload()));const r=await api('settings/test',{});settingsStatus(`Работает: ${r.provider}${r.model?' · '+r.model:''} · размерность ${r.dims}`)}catch(e){settingsStatus(e.message,true)}});
-$('settings-form').onsubmit=e=>{e.preventDefault();const button=$('settings-form').querySelector('[type=submit]');run(button,async()=>{try{await api('settings',settingsPayload());settingsStatus('Сохранено. Считаю смысловые связи…');await loadSemantic();$('settings-dialog').close();notify(`Смысловые связи пересчитаны: ${semantic.links.length} предложений`+(semantic.fetched?`, запрошено векторов: ${semantic.fetched}`:'')+'.')}catch(err){settingsStatus(err.message,true)}})};
+$('settings-test').onclick=()=>run($('settings-test'),async()=>{settingsStatus('Сохраняю и запрашиваю тестовый вектор…');try{applySettings(await api('settings',settingsPayload()));const r=await api('settings/test',{});settingsStatus(`Работает: ${r.provider}${r.model?' · '+r.model:''} · размерность ${r.dims}`)}catch(e){settingsStatus(e.message,true)}});
+$('settings-form').onsubmit=e=>{e.preventDefault();const button=$('settings-form').querySelector('[type=submit]');run(button,async()=>{try{applySettings(await api('settings',settingsPayload()));settingsStatus('Сохранено. Считаю смысловые связи…');await loadSemantic();$('settings-dialog').close();notify(`Смысловые связи пересчитаны: ${semantic.links.length} предложений`+(semantic.fetched?`, запрошено векторов: ${semantic.fetched}`:'')+'.')}catch(err){settingsStatus(err.message,true)}})};
+$('chat-test').onclick=()=>run($('chat-test'),async()=>{settingsStatus('Сохраняю и спрашиваю модель…');try{applySettings(await api('settings',settingsPayload()));const r=await api('settings/test-chat',{});settingsStatus(`Чат работает: ${r.model} ответила «${r.reply}»`)}catch(e){settingsStatus(e.message,true)}});
+function applySettings(values){fillSettings(values);searchMode=values.search.mode;chatConfigured=!!values.chat.url;$('chat-model').textContent=chatConfigured?`${values.chat.model} · ответы только по вашим заметкам`:'Модель не подключена';showSearchMode();if(chatOpen())renderChat()}
 $('semantic-toggle').onclick=()=>{semanticOn=!semanticOn;$('semantic-toggle').setAttribute('aria-pressed',String(semanticOn));showGraph()};
+
+// ── Chat with the knowledge base ──────────────────────────────────────────
+let chatMessages=[],chatBusy=false,chatConfigured=false;
+const chatOpen=()=>!$('chat').hidden;
+function setChat(open){$('chat').hidden=!open;$('chat-toggle').setAttribute('aria-expanded',String(open));document.body.classList.toggle('chat-open',open);if(open){renderChat();$('chat-input').focus()}}
+function chatEmpty(){
+  const box=el('div',undefined,'chat-empty');
+  if(!chatConfigured){box.append(el('p','Чтобы общаться с LLM, укажите модель в настройках: например, Ollama с qwen3 или любой OpenAI-совместимый сервер.'));const b=el('button','Открыть настройки ⚙');b.onclick=()=>$('settings').click();box.append(b);return box}
+  box.append(el('p','Спросите что-нибудь — ответ будет построен по вашим заметкам со ссылками на них.'));
+  for(const example of ['Как мы защищаемся от того, что агент выдумывает факты?','Какие решения приняты по хранению данных?','Что мешает новой команде начать пользоваться?']){const b=el('button',example);b.onclick=()=>{$('chat-input').value=example;sendChat()};box.append(b)}
+  return box;
+}
+function renderAnswer(message){
+  const box=el('div',undefined,'msg bot'),byNumber=new Map((message.sources||[]).map(s=>[s.n,s]));
+  const cite=n=>{const source=byNumber.get(n);if(!source)return null;const b=el('button',String(n),'cite');b.title=source.title;b.onclick=()=>citeOpen(source.id);b.onmouseenter=()=>{hover=shown.get(source.id)||null;refreshLit()};b.onmouseleave=()=>{hover=null;refreshLit()};return b};
+  for(const block of parse(message.content)){
+    if(block.type==='code'){const pre=el('pre');pre.append(el('code',block.text));box.append(pre)}
+    else if(block.type==='ul'||block.type==='ol'){const list=el(block.type);if(block.start>1)list.start=block.start;for(const item of block.items){const li=el('li');li.append(renderInline(item,cite));list.append(li)}box.append(list)}
+    else{const node=el(block.type==='h'?'h4':'p');node.append(renderInline(block.inline,cite));box.append(node)}
+  }
+  const cited=(message.sources||[]).filter(s=>s.cited),other=(message.sources||[]).filter(s=>!s.cited);
+  const sourceButton=s=>{const b=el('button',undefined,'source');b.append(el('b',`[${s.n}]`),el('span',s.title),el('small',reviewShort[s.review],s.review));b.onclick=()=>citeOpen(s.id);return b};
+  if(message.sources?.length){
+    const list=el('div',undefined,'sources');cited.forEach(s=>list.append(sourceButton(s)));
+    if(other.length){const more=el('details');more.append(el('summary',cited.length?`ещё найдено: ${other.length}`:`найдено заметок: ${other.length}, в ответе не процитированы`));other.forEach(s=>more.append(sourceButton(s)));list.append(more)}
+    box.append(list);
+  }
+  const actions=el('div',undefined,'msg-actions'),save=el('button','Сохранить как черновик','pill');
+  save.title='Ответ модели станет заметкой «предложено» в пространстве агентов со связями на процитированные заметки';
+  save.onclick=()=>run(save,async()=>{const question=message.question||'';const result=await api('brain/create',{title:('Ответ: '+question).slice(0,190),body:`Вопрос: ${question}\n\n${message.content}`,kind:'note',origin:'chat',links:cited.map(s=>s.id),tags:['chat']});save.textContent='Сохранено';save.disabled=true;await load();notify('Ответ сохранён черновиком в пространство агентов.');void result});
+  actions.append(save);box.append(actions);
+  return box;
+}
+function citeOpen(id){setChat(false);openNote(id)}
+function renderChat(){
+  const log=$('chat-log');log.replaceChildren();
+  if(!chatMessages.length)log.append(chatEmpty());
+  for(const message of chatMessages){
+    if(message.role==='user')log.append(el('div',message.content,'msg user'));
+    else if(message.error)log.append(el('div',message.content,'msg error'));
+    else log.append(renderAnswer(message));
+  }
+  if(chatBusy)log.append(el('div','Ищу подходящие заметки и спрашиваю модель','msg thinking'));
+  log.scrollTop=log.scrollHeight;
+}
+async function sendChat(){
+  const text=$('chat-input').value.trim();if(!text||chatBusy)return;
+  chatMessages.push({role:'user',content:text});$('chat-input').value='';chatBusy=true;renderChat();
+  try{
+    const history=chatMessages.filter(m=>!m.error).map(m=>({role:m.role,content:m.content})).slice(-12);
+    const result=await api('brain/chat',{messages:history,space:space==='all'?'':space});
+    chatMessages.push({role:'assistant',content:result.answer,sources:result.sources,question:text});
+    const ids=result.sources.filter(s=>s.cited).map(s=>s.id);if(ids.length)flash(ids);
+  }catch(e){chatMessages.push({role:'assistant',content:'Не получилось ответить: '+e.message,error:true})}
+  finally{chatBusy=false;renderChat()}
+}
+$('chat-toggle').onclick=()=>setChat(!chatOpen());$('chat-close').onclick=()=>setChat(false);
+$('chat-clear').onclick=()=>{chatMessages=[];renderChat()};
+$('chat-form').onsubmit=e=>{e.preventDefault();sendChat()};
+$('chat-input').addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendChat()}});
 
 // ── Agent Control extension ──────────────────────────────────────────────
 let activityCursor=null,activityBusy=false,activityFeed=[],callTargets=new Map();
@@ -478,6 +561,7 @@ $('fit').onclick=()=>fit();
 
 initializeGraph();
 extension=await api('extension').catch(()=>({connected:false}));applyExtension();
+await api('settings').then(applySettings).catch(()=>{});
 await load(true);await pollActivity();
 const initial=new URLSearchParams(location.hash.slice(1)).get('note');if(initial)openNote(initial);
 setInterval(()=>{if(!document.hidden)pollActivity()},1800);

@@ -16,8 +16,9 @@
   <div class="command" id="command">
     <span class="command-icon" aria-hidden="true">⌕</span>
     <input type="search" id="search" placeholder="Поиск по заметкам или #тегу…" aria-label="Поиск по заметкам" autocomplete="off" role="combobox" aria-expanded="false" aria-controls="results">
+    <button type="button" id="search-mode" class="mode-pill" title="Режим поиска: нажмите, чтобы переключить">BM25</button>
     <kbd>Ctrl K</kbd>
-    <div id="results" class="results" role="listbox" hidden></div>
+    <div id="results" class="results" hidden><div class="results-modes" role="group" aria-label="Режим поиска"><span>Поиск:</span><button type="button" data-mode="bm25">BM25 · по словам</button><button type="button" data-mode="semantic">По смыслу</button><button type="button" data-mode="hybrid">Гибрид</button></div><div id="results-list" role="listbox"></div></div>
   </div>
   <div class="actions">
     <span id="connection" class="live"><i aria-hidden="true"></i><span>Локально</span></span>
@@ -77,6 +78,13 @@
   <p id="graph-status" class="graph-status" role="status">Загрузка памяти…</p>
 </footer>
 
+<button id="chat-toggle" class="chat-fab" aria-expanded="false" aria-controls="chat" title="Спросить LLM по вашим заметкам"><span aria-hidden="true">✦</span><span class="label">Спросить базу</span></button>
+<aside id="chat" class="chat-panel" aria-label="Чат с базой знаний" hidden>
+  <div class="chat-head"><div><h2>Чат с базой знаний</h2><small id="chat-model">Ответы строятся только по вашим заметкам</small></div><div><button id="chat-clear" class="ghost" title="Новый разговор" aria-label="Новый разговор">⟲</button><button id="chat-close" class="ghost" aria-label="Закрыть чат">✕</button></div></div>
+  <div id="chat-log" class="chat-log" aria-live="polite"></div>
+  <form id="chat-form" class="chat-form"><textarea id="chat-input" rows="2" placeholder="Спросите о ваших заметках… (Enter — отправить)" maxlength="4000"></textarea><button type="submit" class="pill primary" aria-label="Отправить">↑</button></form>
+</aside>
+
 <section id="activity-panel" class="activity-panel" aria-label="События агентов" hidden><div class="activity-heading"><span>Вызовы агентов</span><small id="activity-state">Подключение…</small></div><div id="activity-feed" aria-live="off"></div></section>
 <div id="notice" role="status" aria-live="polite"></div>
 
@@ -90,9 +98,18 @@
 <select id="set-provider" name="provider"><option value="local">Встроенный — без сети и без модели (лексическое сходство)</option><option value="openai">OpenAI-совместимый: OpenAI, LM Studio, vLLM, LiteLLM, llama.cpp</option><option value="ollama">Ollama</option><option value="tei">HuggingFace Text Embeddings Inference</option></select>
 <div id="endpoint-fields">
 <label for="set-url">URL эндпоинта</label><input id="set-url" name="url" autocomplete="off" spellcheck="false">
-<div class="field-row"><div><label for="set-model">Модель</label><input id="set-model" name="model" autocomplete="off" spellcheck="false"></div><div><label for="set-prefix">Префикс фрагмента</label><input id="set-prefix" name="document_prefix" autocomplete="off" spellcheck="false" placeholder="например, passage: "></div></div>
+<label for="set-model">Модель</label><input id="set-model" name="model" autocomplete="off" spellcheck="false">
+<div class="field-row"><div><label for="set-prefix">Префикс фрагмента</label><input id="set-prefix" name="document_prefix" autocomplete="off" spellcheck="false" placeholder="например, query: "></div><div><label for="set-qprefix">Префикс запроса</label><input id="set-qprefix" name="query_prefix" autocomplete="off" spellcheck="false" placeholder="например, query: "></div></div>
 <label for="set-key">API-ключ</label><input id="set-key" name="api_key" type="password" autocomplete="new-password" spellcheck="false">
 </div>
+<h3>Поиск</h3>
+<fieldset class="radio-row"><legend>Режим по умолчанию</legend><label class="check"><input type="radio" name="search_mode" value="bm25"> BM25 — по словам</label><label class="check"><input type="radio" name="search_mode" value="semantic"> По смыслу</label><label class="check"><input type="radio" name="search_mode" value="hybrid"> Гибрид (RRF)</label></fieldset>
+<h3>Чат с LLM</h3>
+<p class="hint">Вопрос → поиск подходящих заметок → ответ модели со ссылками на них. Заметки передаются модели как данные, ответ можно сохранить черновиком в пространство агентов.</p>
+<div class="field-row"><div><label for="chat-provider">Провайдер</label><select id="chat-provider" name="chat_provider"><option value="ollama">Ollama</option><option value="openai">OpenAI-совместимый</option></select></div><div><label for="chat-model-input">Модель</label><input id="chat-model-input" name="chat_model" autocomplete="off" spellcheck="false" placeholder="qwen3:1.7b"></div></div>
+<label for="chat-url">URL</label><input id="chat-url" name="chat_url" autocomplete="off" spellcheck="false" placeholder="http://localhost:11434">
+<div class="field-row"><div><label for="chat-key">API-ключ</label><input id="chat-key" name="chat_key" type="password" autocomplete="new-password" spellcheck="false"></div><div><label for="chat-notes">Заметок в контексте</label><input id="chat-notes" name="chat_notes" type="number" min="1" max="12"></div></div>
+<div class="dialog-actions left"><button type="button" id="chat-test" class="pill">Проверить чат</button></div>
 <h3>Семантические связи</h3>
 <div class="field-row"><fieldset><legend>Искать между заметками</legend><label class="check"><input type="checkbox" name="space" value="human"> людей</label><label class="check"><input type="checkbox" name="space" value="agent"> агентов</label></fieldset>
 <div><label class="check"><input type="checkbox" id="set-auto"> Порог автоматически (98-й перцентиль по базе)</label><label for="set-threshold">Порог сходства <output id="threshold-value"></output></label><input id="set-threshold" name="threshold" type="range" min="0.05" max="0.95" step="0.01">

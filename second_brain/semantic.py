@@ -30,7 +30,7 @@ from pathlib import Path
 import re
 import sqlite3
 
-from .brain import SPACE_SQL
+from .brain import SPACE_SQL, SPACES
 from .embeddings import endpoint_embed
 
 CHUNK_CHARS = 1000
@@ -201,15 +201,16 @@ class Semantic:
 
     def _notes(self, spaces):
         marks = ','.join('?' * len(spaces))
-        rows = self.brain.db.execute(f'SELECT n.id,n.title,n.body,n.hash FROM notes n WHERE {SPACE_SQL} IN ({marks}) ORDER BY n.id LIMIT ?',
+        rows = self.brain.db.execute(f'SELECT n.id,n.title,n.body,n.hash,n.kind,n.review,{SPACE_SQL} AS space FROM notes n WHERE {SPACE_SQL} IN ({marks}) ORDER BY n.id LIMIT ?',
                                      (*spaces, MAX_NOTES + 1)).fetchall()
         if len(rows) > MAX_NOTES:
             raise ValueError(f'Semantic suggestions support up to {MAX_NOTES} notes in the chosen spaces')
         return rows
 
-    def _embed(self, texts, config):
+    def _embed(self, texts, config, prefix=None):
         """Normalised cached vectors for every text; missing ones fetched in batches."""
-        identity = json.dumps([config['provider'], config['url'], config['model'], config['document_prefix']])
+        prefix = config['document_prefix'] if prefix is None else prefix
+        identity = json.dumps([config['provider'], config['url'], config['model'], prefix])
         keys = [hashlib.sha256((identity + '\0' + t).encode()).hexdigest() for t in texts]
         cached = {}
         unique = list(dict.fromkeys(keys))
@@ -219,23 +220,78 @@ class Semantic:
         missing = [(k, t) for k, t in dict(zip(keys, texts)).items() if k not in cached]
         for i in range(0, len(missing), config['batch_size']):
             batch = missing[i:i + config['batch_size']]
-            vectors = endpoint_embed([config['document_prefix'] + t for _, t in batch], config)
+            vectors = endpoint_embed([prefix + t for _, t in batch], config)
             with self.db:
                 for (key, _), vector in zip(batch, vectors):
                     cached[key] = array('f', normalise(vector)).tobytes()
                     self.db.execute('INSERT OR REPLACE INTO vectors VALUES (?,?)', (key, cached[key]))
         return [list(array('f', cached[k])) for k in keys], len(missing)
 
-    def _score_endpoint(self, texts, config, excluded):
+    def _note_vectors(self, texts, config):
+        """Head vector, chunk vectors and chunk texts per (title, cleaned body)."""
         heads_text = [(t + '\n\n' + b[:HEAD_CHARS]).strip() for t, b in texts]
         chunks_text = [chunk_note(t, b) for t, b in texts]
-        flat = heads_text + [c for group in chunks_text for c in group]
-        vectors, fetched = self._embed(flat, config)
+        vectors, fetched = self._embed(heads_text + [c for group in chunks_text for c in group], config)
         n = len(texts)
         heads, chunks, at = vectors[:n], [], n
         for group in chunks_text:
             chunks.append(vectors[at:at + len(group)])
             at += len(group)
+        return heads, chunks, chunks_text, fetched
+
+    def search(self, query, mode, settings, space='', limit=20):
+        """BM25, semantic or hybrid (reciprocal rank fusion, k=60) search over a space."""
+        if mode not in ('bm25', 'semantic', 'hybrid'):
+            raise ValueError('Unknown search mode')
+        query = query.strip()[:500]
+        if not query:
+            return {'items': [], 'total': 0, 'mode': mode}
+        if mode == 'bm25':
+            result = self.brain.list(query, space=space, limit=limit)
+            return {**result, 'mode': mode}
+        ranked = self._semantic_ranking(query, settings, space)
+        if mode == 'semantic':
+            top = ranked[0][0] if ranked else 0
+            cutoff = top * 0.75 if settings['embeddings']['provider'] != 'local' else top * 0.4
+            items = [{**note, 'score': round(score, 4)} for score, note in ranked if score >= cutoff][:limit]
+            return {'items': items, 'total': len(items), 'mode': mode}
+        lexical = self.brain.list(query, space=space, limit=100, match_any=True)['items']
+        fused = {}
+        for rank, note in enumerate(lexical):
+            fused.setdefault(note['id'], [0.0, note])[0] += 1 / (60 + rank + 1)
+        for rank, (_, note) in enumerate(ranked[:100]):
+            entry = fused.setdefault(note['id'], [0.0, note])
+            entry[0] += 1 / (60 + rank + 1)
+            if not entry[1].get('excerpt'):
+                entry[1] = {**entry[1], 'excerpt': note['excerpt']}
+        items = [{**note, 'score': round(score, 5)} for score, note in sorted(fused.values(), key=lambda x: -x[0])][:limit]
+        return {'items': items, 'total': len(items), 'mode': mode}
+
+    def _semantic_ranking(self, query, settings, space):
+        config = settings['embeddings']
+        notes = self._notes([space] if space else sorted(SPACES))
+        if not notes:
+            return []
+        titles = dict(self.brain.db.execute('SELECT id,title FROM notes'))
+        texts = [(r['title'], clean_body(r['body'], titles)) for r in notes]
+        card = lambda r, excerpt: {'id': r['id'], 'title': r['title'], 'kind': r['kind'], 'review': r['review'],
+                                   'space': r['space'], 'excerpt': excerpt}
+        if config['provider'] == 'local':
+            vectors = ngram_vectors([f'{t} {t} {b}' for t, b in texts] + [query])
+            question = vectors.pop()
+            scored = [(sum(w * v.get(g, 0.0) for g, w in question.items()), card(r, b[:220])) for r, (_, b), v in zip(notes, texts, vectors)]
+        else:
+            heads, chunks, chunks_text, _ = self._note_vectors(texts, config)
+            question = self._embed([query], config, prefix=config['query_prefix'])[0][0]
+            scored = []
+            for r, head, vectors, chunk_texts in zip(notes, heads, chunks, chunks_text):
+                best, at = max((dot(question, v), i) for i, v in enumerate(vectors))
+                scored.append((max(best, dot(question, head)), card(r, chunk_texts[at].split('\n\n', 1)[-1][:220])))
+        return sorted((s for s in scored if s[0] > 0), key=lambda x: -x[0])
+
+    def _score_endpoint(self, texts, config, excluded):
+        heads, chunks, chunks_text, fetched = self._note_vectors(texts, config)
+        n = len(texts)
         head_scores = {i: {} for i in range(n)}
         for i in range(n):
             for j in range(i + 1, n):

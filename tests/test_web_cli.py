@@ -8,6 +8,7 @@ import threading
 import unittest
 from unittest import mock
 import urllib.error
+import urllib.parse
 import urllib.request
 
 from second_brain.cli import main
@@ -75,6 +76,19 @@ class WebCliTests(unittest.TestCase):
             remaining = {frozenset((l['source'], l['target'])) for l in call('/api/brain/semantic')['links']}
             self.assertNotIn(frozenset((first['source'], first['target'])), remaining)
             self.assertNotIn(frozenset((second['source'], second['target'])), remaining)
+            found = call('/api/brain/search?' + urllib.parse.urlencode({'q': 'резервное копирование заметок', 'mode': 'semantic', 'space': 'human'}))
+            self.assertEqual(found['mode'], 'semantic')
+            self.assertTrue(found['items'] and all(i['space'] == 'human' for i in found['items']))
+            self.assertEqual(call('/api/brain/search?' + urllib.parse.urlencode({'q': 'резервное копирование', 'mode': 'bm25'}))['items'], [])
+            saved_answer = call('/api/brain/create', {'title': 'Ответ: тест', 'body': 'Ответ модели [1]', 'origin': 'chat',
+                                                      'links': [first['source']], 'tags': ['chat']})
+            note = call('/api/brain/note?id=' + saved_answer['id'])
+            self.assertEqual((note['space'], note['review'], note['tags']), ('agent', 'proposed', ['chat']))
+            self.assertEqual([r['target'] for r in note['relations']], [first['source']])
+            with self.assertRaises(urllib.error.HTTPError) as bad_links:
+                call('/api/brain/create', {'title': 'x', 'body': 'y', 'links': ['../../etc']})
+            self.assertEqual(bad_links.exception.code, 400)
+            bad_links.exception.close()
             with self.assertRaises(urllib.error.HTTPError) as bad:
                 call('/api/settings', {'embeddings': {'provider': 'openai', 'url': 'ftp://x', 'model': 'm'}})
             self.assertEqual(bad.exception.code, 400)
