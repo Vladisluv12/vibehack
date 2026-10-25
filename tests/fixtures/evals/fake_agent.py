@@ -11,7 +11,8 @@ def main():
     parser.add_argument('--prompt', required=True)
     parser.add_argument('--workspace', required=True)
     parser.add_argument('--tokens', type=int, default=10)
-    parser.add_argument('--mode', choices=('skill', 'slow', 'nonzero'), default='skill')
+    parser.add_argument('--extra-tokens', type=int)
+    parser.add_argument('--mode', choices=('skill', 'slow', 'nonzero', 'overwrite-check'), default='skill')
     parser.add_argument('--no-usage', action='store_true')
     args = parser.parse_args()
     workspace = Path(args.workspace)
@@ -21,11 +22,17 @@ def main():
     (workspace / 'prompt.txt').write_text(args.prompt, encoding='utf-8')
     if args.mode == 'slow':
         time.sleep(10)
+    if args.mode == 'overwrite-check':
+        (workspace / 'check.py').write_text('raise SystemExit(0)\n', encoding='utf-8')
+        (workspace / 'expected.txt').write_text('wrong answer', encoding='utf-8')
+        (workspace / 'answer.txt').write_text('wrong answer', encoding='utf-8')
     if 'EVAL_SKILL_MARKER' in args.prompt:
         (workspace / 'answer.txt').write_bytes((workspace / 'expected.txt').read_bytes())
     print('fake agent log; no model or network')
     if not args.no_usage:
         print(json.dumps({'usage': {'tokens': args.tokens}}))
+        if args.extra_tokens is not None:
+            print(json.dumps({'usage': {'tokens': args.extra_tokens}}))
     return 7 if args.mode == 'nonzero' else 0
 
 

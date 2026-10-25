@@ -112,7 +112,13 @@ class LearningLoopTests(unittest.TestCase):
         self.assertEqual(skills_all['decision'], 'recommend_enable')
         mechanisms = {(m['name'], m['enabled'], m['actor']) for m in self.cli('mechanism')}
         self.assertEqual(mechanisms, {('reflection', 1, 'human:cli'), ('skills', 1, 'human:cli')})
-        no_gain = self.cli('eval-decide', '--baseline', a['batch_id'], '--candidate', b['batch_id'],
+        # Mismatched pairs are refused outright (exit 1 with the error), without touching switches.
+        with self.assertRaises(ValueError):
+            self.cli('eval-decide', '--baseline', a['batch_id'], '--candidate', b['batch_id'],
+                     '--tier', 'weak', '--mechanism', 'reflection')
+        self.cli('promote', '--skill', skill, '--stage', 'off')  # the human withdraws the skill
+        c2 = self.cli('eval-run', '--tasks', str(tasks), '--config', 'C', '--model', 'qwen-small', '--agent', str(agent))
+        no_gain = self.cli('eval-decide', '--baseline', b['batch_id'], '--candidate', c2['batch_id'],
                            '--tier', 'weak', '--mechanism', 'reflection')
         self.assertEqual(no_gain['decision'], 'disable')
         mechanisms = {(m['name'], m['enabled'], m['actor']) for m in self.cli('mechanism')}

@@ -2,6 +2,7 @@
   "id": "skill-task",
   "prompt": "Write answer.txt with the contents of expected.txt.",
   "workspace": "../workspace",
-  "check": {"argv": ["python3", "check.py"], "expect_exit": 0},
+  "oracle": "oracle",
+  "check": {"argv": ["python3", "check.py", "{workspace}"], "expect_exit": 0},
   "applies_to": "copy a file using the evaluated skill"
 }
