@@ -34,6 +34,21 @@ class SkillsTests(unittest.TestCase):
         return skill_pack(self.brain, self.learning,
                           **(dict(tier='weak', task='build', run_id='run') | extra))
 
+    def test_skill_outside_its_scope_is_not_offered(self):
+        self.enable()
+        windows = self.skill('Python installation', body='use the installer', applies_to='Windows PowerShell only')
+        fedora = self.skill('Python installation', body='dnf install python3', applies_to='Fedora Linux')
+        for ident in (windows, fedora):
+            promote(self.learning, ident, 'full', 'human:test')
+        self.assertEqual(self.pack(task='Python installation on Fedora')['skill_ids'], [fedora])
+
+    def test_evaluation_mode_ignores_switches_and_canary_but_not_off(self):
+        ident = self.skill()
+        self.assertEqual(self.pack()['skill_ids'], [])  # skills are off in production
+        self.assertEqual(self.pack(for_evaluation=True)['skill_ids'], [ident])
+        promote(self.learning, ident, 'off', 'human:test')
+        self.assertEqual(self.pack(for_evaluation=True)['skill_ids'], [])
+
     def test_off_produces_no_pack_rollout_or_served_rows(self):
         self.skill()
         self.assertEqual(self.pack(), {'text': '', 'skill_ids': [], 'canary_ids': []})

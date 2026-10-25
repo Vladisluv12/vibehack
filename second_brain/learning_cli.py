@@ -93,7 +93,8 @@ def run(args):
             if args.config != 'A':
                 def pack(task):
                     return skills.skill_pack(brain, learning, tier=tier, task=task['applies_to'] or task['prompt'],
-                                             run_id=f"eval:{task['id']}", include_reflected=args.config == 'C')['text']
+                                             run_id=f"eval:{task['id']}", include_reflected=args.config == 'C',
+                                             for_evaluation=True)['text']
             batch = evals.run_batch(tasks, config=args.config, tier=tier, agent_model=args.model,
                                     agent_argv=evals.load_agent_argv(args.agent), learning=learning,
                                     skill_pack=pack, timeout=args.timeout)

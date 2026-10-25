@@ -27,19 +27,31 @@ def _render(parts):
     return '\n'.join(line for _, line, _ in parts) + '\n\n' + '\n\n'.join(body for _, _, body in parts)
 
 
-def skill_pack(brain, learning, *, tier, task, run_id, k=3, budget_chars=4000, include_reflected=True) -> dict:
+STOP = {'the', 'and', 'for', 'with', 'only', 'any', 'all', 'для', 'при', 'или', 'только', 'все', 'это'}
+
+
+def scope_words(text):
+    return {w for w in re.findall(r'\w+', clean_text(text).casefold(), re.UNICODE) if len(w) >= 3 and w not in STOP}
+
+
+def skill_pack(brain, learning, *, tier, task, run_id, k=3, budget_chars=4000, include_reflected=True,
+               for_evaluation=False) -> dict:
     """Return at most k reviewed, task-matching skills within a character budget.
 
     Canary membership is sha256(cleaned run_id + skill_id) modulo 100 < 20.
     include_reflected=False leaves out skills the reviewer wrote, so evaluation can
     tell the value of reflection (config C) from that of skills in general (B).
+    A skill is offered only if its applies_to shares a word with the task (lexical:
+    the pack shows applies_to so the model can still judge the fit).
+    for_evaluation delivers every reviewed skill not switched off, regardless of
+    the production switches and the canary, so a batch can measure them first.
     Index lines and reference headings remain whole; only bodies may be cut. IDs
     are reported/served only when their index and some body fit in the pack.
     """
     empty = {'text': '', 'skill_ids': [], 'canary_ids': []}
     if tier not in TIERS:
         raise ValueError('Unknown tier')
-    if not learning.enabled(tier, 'skills'):
+    if not for_evaluation and not learning.enabled(tier, 'skills'):
         return empty
     if type(k) is not int or k < 0 or type(budget_chars) is not int or budget_chars < 0:
         raise ValueError('k and budget_chars must be non-negative integers')
@@ -49,6 +61,7 @@ def skill_pack(brain, learning, *, tier, task, run_id, k=3, budget_chars=4000, i
     query = ' '.join(re.findall(r'\w+', clean_text(task), re.UNICODE)[:12])
     if not query:
         return empty
+    task_words = scope_words(task)
     parts, canaries, offset = [], [], 0
     while len(parts) < k:
         page = brain.list(query, offset=offset, limit=100, any_terms=True)
@@ -58,7 +71,8 @@ def skill_pack(brain, learning, *, tier, task, run_id, k=3, budget_chars=4000, i
             if (note['review'] != 'reviewed' or meta.get('memory_type') != 'skill'
                     or ('for_tier' in meta and meta['for_tier'] != tier)
                     or str(meta.get('source', '')).startswith('eval:')
-                    or (not include_reflected and meta.get('agent_model') == 'reviewer')):
+                    or (not include_reflected and meta.get('agent_model') == 'reviewer')
+                    or not scope_words(meta.get('applies_to', '')) & task_words):
                 continue
             ident = note['id']
             with learning.db:
@@ -66,7 +80,7 @@ def skill_pack(brain, learning, *, tier, task, run_id, k=3, budget_chars=4000, i
                     VALUES (?,'canary',?)''', (ident, time.time()))
                 stage = learning.db.execute('SELECT stage FROM rollout WHERE skill_id=?', (ident,)).fetchone()['stage']
             bucket = int(hashlib.sha256((run_id + ident).encode()).hexdigest(), 16) % 100
-            if stage != 'full' and not (stage == 'canary' and bucket < 20):
+            if stage == 'off' or (not for_evaluation and stage != 'full' and not (stage == 'canary' and bucket < 20)):
                 continue
             title = ' '.join(clean_text(note['title'], 200).split())
             applies_to = ' '.join(clean_text(meta.get('applies_to'), 500).split())
