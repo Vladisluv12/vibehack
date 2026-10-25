@@ -12,6 +12,8 @@ import re
 import time
 
 from .learning import TIERS, clean_ids, clean_text
+
+MAX_SCAN = 300  # search hits inspected per lookup
 from .reflection import _run_id
 
 
@@ -25,10 +27,12 @@ def _render(parts):
     return '\n'.join(line for _, line, _ in parts) + '\n\n' + '\n\n'.join(body for _, _, body in parts)
 
 
-def skill_pack(brain, learning, *, tier, task, run_id, k=3, budget_chars=4000) -> dict:
+def skill_pack(brain, learning, *, tier, task, run_id, k=3, budget_chars=4000, include_reflected=True) -> dict:
     """Return at most k reviewed, task-matching skills within a character budget.
 
     Canary membership is sha256(cleaned run_id + skill_id) modulo 100 < 20.
+    include_reflected=False leaves out skills the reviewer wrote, so evaluation can
+    tell the value of reflection (config C) from that of skills in general (B).
     Index lines and reference headings remain whole; only bodies may be cut. IDs
     are reported/served only when their index and some body fit in the pack.
     """
@@ -47,13 +51,14 @@ def skill_pack(brain, learning, *, tier, task, run_id, k=3, budget_chars=4000) -
         return empty
     parts, canaries, offset = [], [], 0
     while len(parts) < k:
-        page = brain.list(query, offset=offset, limit=100)
+        page = brain.list(query, offset=offset, limit=100, any_terms=True)
         for item in page['items']:
             note = brain.get(item['id'])
             meta = note['meta']
             if (note['review'] != 'reviewed' or meta.get('memory_type') != 'skill'
                     or ('for_tier' in meta and meta['for_tier'] != tier)
-                    or str(meta.get('source', '')).startswith('eval:')):
+                    or str(meta.get('source', '')).startswith('eval:')
+                    or (not include_reflected and meta.get('agent_model') == 'reviewer')):
                 continue
             ident = note['id']
             with learning.db:
@@ -76,7 +81,7 @@ def skill_pack(brain, learning, *, tier, task, run_id, k=3, budget_chars=4000) -
                 canaries.append(ident)
             if len(parts) == k:
                 break
-        if page['next'] is None:
+        if page['next'] is None or page['next'] >= MAX_SCAN:
             break
         offset = page['next']
     if not parts:

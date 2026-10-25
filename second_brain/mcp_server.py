@@ -140,6 +140,20 @@ def build(vault: Path, state: Path, agent_model: str = ''):
         """After a task: which served notes you actually relied on, and outcome success|failure|unknown."""
         return learning.report_usage(run_id, used_ids, outcome)
 
+    @mcp.tool(annotations={'readOnlyHint': True, 'destructiveHint': False, 'openWorldHint': False})
+    def get_skill_pack(task: str, run_id: str) -> dict:
+        """Up to 3 reviewed skills for this task, if skills are switched on for your tier. Empty otherwise."""
+        from .skills import skill_pack
+        with open_vault() as b:
+            return skill_pack(b, learning, tier=tier, task=task, run_id=run_id)
+
+    @mcp.tool(annotations={'readOnlyHint': False, 'destructiveHint': False, 'openWorldHint': False})
+    def reflect(run_id: str) -> dict:
+        """Ask for a reflection on one of your ingested runs. A reviewer later proposes a draft; nothing is
+        written now."""
+        from .reflection import request_reflection
+        return request_reflection(learning, run_id)
+
     return mcp
 
 

@@ -325,7 +325,7 @@ class Brain:
                             warnings.append({"path": rel, "link": target, "error": "ambiguous" if matches else "unresolved"})
         return {"notes": len(records), "links": self.db.execute('SELECT count(*) FROM links').fetchone()[0], "warnings": warnings[:100], "warning_count": len(warnings)}
 
-    def list(self, query="", kind="", offset=0, limit=100):
+    def list(self, query="", kind="", offset=0, limit=100, any_terms=False):
         if kind and kind not in KINDS:
             raise ValueError("Unknown note kind")
         offset, limit = max(0, int(offset)), min(500, max(1, int(limit)))
@@ -334,7 +334,8 @@ class Brain:
         tokens = re.findall(r"\w+", query[:300], re.UNICODE)
         if tokens:
             where += " AND n.id IN (SELECT id FROM search WHERE search MATCH ?)"
-            args.append(" AND ".join('"'+t+'"*' for t in tokens[:12]))
+            # any_terms: a task description rarely shares every word with the note that helps.
+            args.append((" OR " if any_terms else " AND ").join('"'+t+'"*' for t in tokens[:12]))
         total = self.db.execute("SELECT count(*) FROM notes n WHERE " + where, args).fetchone()[0]
         if tokens:
             # FTS5 rank defaults to BM25; lower values are better. Keep the

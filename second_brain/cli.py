@@ -7,6 +7,7 @@ import shutil
 from .brain import Brain, restore_backup
 from .github import import_github
 from .learning import MECHANISMS, TIERS, Learning
+from . import learning_cli
 
 DEMO = Path(__file__).resolve().parent.parent / 'examples' / 'demo-vault'
 SHOWCASE = DEMO.parent / 'showcase-vault'
@@ -33,6 +34,7 @@ def parser():
     c.add_argument('--tier', choices=TIERS); c.add_argument('--name', choices=MECHANISMS)
     g = c.add_mutually_exclusive_group(); g.add_argument('--on', action='store_true'); g.add_argument('--off', action='store_true')
     c.add_argument('--reason', default='')
+    learning_cli.add_commands(cmds)
     c = cmds.add_parser('mcp', help='STDIO MCP gateway (requires fastmcp)')
     c.add_argument('--agent-model', default='', help='Model id of the connecting agent; tier comes from state/agents.json')
     return p
@@ -67,6 +69,12 @@ def main(argv=None):
         finally:
             learning.close()
         return print(json.dumps(result, ensure_ascii=False, indent=2))
+    if args.cmd in learning_cli.COMMANDS:
+        result, code = learning_cli.run(args)
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        if code:
+            raise SystemExit(code)
+        return
     brain = Brain(args.vault, args.state)
     try:
         result = brain.sync()
