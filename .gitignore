@@ -1,8 +1,12 @@
 .venv/
 .venv-win/
 data/
-
 __pycache__/
 *.pyc
 runs/
 models/
+slovo.zip
+slovo/
+rsl_translator_context.zip
+uploads/
+.env

@@ -5,37 +5,82 @@
 
 python extract_slovo.py --workers 6
 python extract_slovo.py --workers 4 --verbose-logs
+
+Работа на нескольких компьютерах (у всех одинаковые vocab.json, annotations.csv и флаги):
+    3 одинаковых ПК:      --shard 0/3   --shard 1/3   --shard 2/3
+    мощный ПК + 2 ноута:  мощный --shard 0,1/4 --workers 16,  ноуты --shard 2/4 и --shard 3/4
+Видео делятся по хешу attachment_id — части не пересекаются и вместе покрывают всё.
+Потом: python merge_kp.py pack (на каждом) -> перенести zip -> python merge_kp.py unpack *.zip -> check.
+
+Ускорение (одинаково на всех ПК!): --max-side 640 --frame-step 2  (~2-3x быстрее)
 """
 import argparse
+import atexit
 import csv
+import hashlib
+import json
+import platform
 import math
 import multiprocessing as mproc
 import os
+import re
 import sys
+import threading
 import time
+import warnings
 from pathlib import Path
 
-from console import configure_console, duration
+
+def quiet_library_logs():
+    """Убирает служебные INFO/WARNING из stderr, сохраняя ошибки и traceback.
+
+    MediaPipe пишет часть сообщений напрямую из C++, поэтому настройки
+    Python logging и warnings недостаточно. Фильтр устанавливается до импорта.
+    """
+    os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
+    os.environ["GLOG_minloglevel"] = "2"
+    warnings.filterwarnings("ignore")
+    original = os.dup(2)
+    reader, writer = os.pipe()
+    os.dup2(writer, 2)
+    os.close(writer)
+    noise = re.compile(rb"^(?:[IWD]\d{4,8}\s|INFO:|WARNING:|libEGL warning:|\[\s*(?:WARN|INFO)(?::|\s))")
+
+    def forward_errors():
+        with os.fdopen(reader, "rb") as stream:
+            for line in stream:
+                if not noise.match(line):
+                    remaining = memoryview(line)
+                    while remaining:
+                        remaining = remaining[os.write(original, remaining):]
+
+    thread = threading.Thread(target=forward_errors, daemon=True)
+    thread.start()
+
+    def finish():
+        sys.stderr.flush()
+        os.dup2(original, 2)
+        thread.join(timeout=1)
+        if not thread.is_alive():
+            os.close(original)
+
+    atexit.register(finish)
 
 
-
-
-if __name__ in ("__main__", "__mp_main__"):
-    configure_console()
+if __name__ in ("__main__", "__mp_main__") and "--verbose-logs" not in sys.argv:
+    quiet_library_logs()
 
 import cv2
 import numpy as np
 
-from features import WORDS, SLOVO_DIR, KP_DIR, FEAT_DIM, mp_holistic, process, frame_features
-from extraction_registry import (REGISTRY_DIR, MAX_SIDE, HOLISTIC_OPTIONS, build_catalog,
-                                 default_device_id, device_id, digest, ensure_profile,
-                                 feature_profile, output_valid, task_words, write_report)
+from features import WORDS, SLOVO_DIR, KP_DIR, mp_holistic, process, frame_features
 
+MAX_SIDE = 960
 
 
 def work(job):
-    video, out = job
-    if output_valid(out, FEAT_DIM):
+    video, out, max_side, frame_step = job
+    if out.exists():
         return "skip", video
     cv2.setNumThreads(1)
     cap = cv2.VideoCapture(str(video))
@@ -45,13 +90,22 @@ def work(job):
     feats = []
     # Отдельный Holistic для каждого видео: трекинг не переходит между роликами.
     try:
-        with mp_holistic.Holistic(**HOLISTIC_OPTIONS) as h:
+        with mp_holistic.Holistic(model_complexity=1, smooth_landmarks=True,
+                                  min_detection_confidence=0.5, min_tracking_confidence=0.5) as h:
+            i = 0
             while True:
+                if i % frame_step:
+                    # пропускаемый кадр: grab() без декодирования в картинку — быстрее read()
+                    i += 1
+                    if not cap.grab():
+                        break
+                    continue
+                i += 1
                 ok, frame = cap.read()
                 if not ok:
                     break
                 hh, ww = frame.shape[:2]
-                k = MAX_SIDE / max(hh, ww)
+                k = max_side / max(hh, ww)
                 if k < 1:
                     frame = cv2.resize(frame, (int(ww * k), int(hh * k)), interpolation=cv2.INTER_AREA)
                 feats.append(frame_features(process(h, frame)))
@@ -66,6 +120,13 @@ def work(job):
     return "ok", video
 
 
+def duration(seconds):
+    if seconds is None:
+        return "расчёт…"
+    seconds = max(0, math.ceil(seconds))
+    hours, seconds = divmod(seconds, 3600)
+    minutes, seconds = divmod(seconds, 60)
+    return f"{hours}:{minutes:02d}:{seconds:02d}" if hours else f"{minutes:02d}:{seconds:02d}"
 
 
 def main():
@@ -75,19 +136,14 @@ def main():
     ap.add_argument("--workers", type=int, default=max(1, (os.cpu_count() or 2) // 2))
     ap.add_argument("--log-interval", type=float, default=2,
                     help="интервал обновления прогресса в секундах (по умолчанию 2)")
+    ap.add_argument("--shard", default="0/1",
+                    help="части работы для этого ПК: I/N или I,J/N, например 1/3 или 0,1/4")
+    ap.add_argument("--max-side", type=int, default=MAX_SIDE,
+                    help=f"уменьшать кадр до этой стороны (по умолчанию {MAX_SIDE}; 640 — быстрее)")
+    ap.add_argument("--frame-step", type=int, default=1,
+                    help="обрабатывать каждый N-й кадр (по умолчанию 1; 2 — вдвое быстрее)")
     ap.add_argument("--verbose-logs", action="store_true",
                     help="показывать служебные сообщения MediaPipe")
-    selection = ap.add_mutually_exclusive_group()
-    selection.add_argument("--words", nargs="+", choices=sorted(WORDS),
-                    help="extract only these word IDs; by default use the full vocabulary")
-    ap.add_argument("--dry-run", action="store_true", help="show counts without extracting landmarks")
-    selection.add_argument("--task", type=device_id, help="задание из общего плана: part-01, part-02")
-    ap.add_argument("--plan", type=Path, help="общий план (по умолчанию metadata/extraction/plan.json)")
-    ap.add_argument("--metadata-dir", type=Path, default=REGISTRY_DIR)
-    ap.add_argument("--device-id", type=device_id, default=default_device_id())
-    ap.add_argument("--report-only", action="store_true", help="обновить разметку и отчёт без извлечения")
-    ap.add_argument("--artifact-uri", help="ссылка или адрес архива с точками; файлы не загружаются автоматически")
-    ap.add_argument("--adopt-existing", action="store_true", help="принять старые .npy без версии, полученные тем же кодом")
     args = ap.parse_args()
     if args.workers < 1:
         ap.error("--workers должен быть больше нуля")
@@ -95,70 +151,58 @@ def main():
         ap.error("--log-interval должен быть положительным конечным числом")
 
     try:
-        annotation_source = args.slovo / "annotations.csv"
-        if not annotation_source.is_file():
-            annotation_source = args.metadata_dir / "annotations.tsv"
-        profile = feature_profile()
-        ensure_profile(args.out, profile, args.adopt_existing, write=not args.dry_run)
-        catalog, annotation_rows = build_catalog(annotation_source, WORDS, profile, args.metadata_dir,
-                                                 write=not args.dry_run)
-        ids = task_words(args.plan or args.metadata_dir / "plan.json", args.task, catalog) if args.task else args.words
-        selected = {wid: WORDS[wid] for wid in ids} if ids is not None else WORDS
-    except (ValueError, FileNotFoundError, KeyError) as exc:
-        ap.error(str(exc))
-    scope = args.task or ("words-" + digest(sorted(selected))[:10] if args.words else "all")
+        parts_str, n_str = args.shard.split("/")
+        shard_n = int(n_str)
+        my_parts = {int(x) for x in parts_str.split(",")}
+        assert shard_n >= 1 and all(0 <= x < shard_n for x in my_parts)
+    except (ValueError, AssertionError):
+        ap.error("--shard должен быть вида I/N или I,J/N, где 0 <= I < N, например 1/3 или 0,1/4")
+    if args.max_side < 128 or args.frame_step < 1:
+        ap.error("--max-side >= 128, --frame-step >= 1")
 
-    def publish_report():
-        path = write_report(args.metadata_dir, args.device_id, scope, catalog, annotation_rows,
-                            selected, args.out, args.artifact_uri)
-        print(f"Отчёт устройства: {path}", flush=True)
+    def my_shard(attachment_id):
+        # md5, а не hash(): одинаково на всех компьютерах и при любом порядке строк
+        return int(hashlib.md5(attachment_id.encode()).hexdigest(), 16) % shard_n in my_parts
 
-    label_to_id = {label: wid for wid, (label, _) in selected.items()}
-    jobs, found = [], {wid: 0 for wid in selected}
-    profiles = {wid: {"train": 0, "test": 0, "users": set()} for wid in selected}
-    with open(annotation_source, newline="", encoding="utf-8-sig") as f:
+    label_to_id = {label: wid for wid, (label, _) in WORDS.items()}
+    jobs, found = [], {wid: 0 for wid in WORDS}
+    with open(args.slovo / "annotations.csv", newline="", encoding="utf-8-sig") as f:
         for row in csv.DictReader(f, delimiter="\t"):
             wid = label_to_id.get(row["text"])
-            if wid is None:
+            if wid is None or not my_shard(row["attachment_id"]):
                 continue
             split = "train" if row["train"] == "True" else "test"
             video = args.slovo / split / f"{row['attachment_id']}.mp4"
             out = args.out / split / wid / f"{row['user_id']}_{row['attachment_id']}.npy"
-            jobs.append((video, out))
+            jobs.append((video, out, args.max_side, args.frame_step))
             found[wid] += 1
-            profiles[wid][split] += 1
-            profiles[wid]["users"].add(row["user_id"])
 
     missing = [w for w, n in found.items() if n == 0]
     if missing:
         print("Метки без видео:", {w: WORDS[w][0] for w in missing}, flush=True)
     total = len(jobs)
-    pending = [(video, out) for video, out in jobs if not output_valid(out, FEAT_DIM)]
+    pending = [job for job in jobs if not job[1].exists()]
+
+    # параметры запуска — merge_kp.py check проверит, что на всех ПК они одинаковые
+    meta_dir = args.out / "_meta"
+    meta_dir.mkdir(parents=True, exist_ok=True)
+    parts_name = "-".join(map(str, sorted(my_parts)))
+    (meta_dir / f"shard_{parts_name}_of_{shard_n}_{platform.node()}.json").write_text(json.dumps({
+        "host": platform.node(), "shard": args.shard, "max_side": args.max_side,
+        "frame_step": args.frame_step, "classes": len(WORDS), "videos": len(jobs),
+    }, ensure_ascii=False, indent=1), encoding="utf-8")
     stats = {"ok": 0, "skip": total - len(pending), "fail": 0}
     print("Извлечение точек Slovo", flush=True)
     print(f"Данные: {args.slovo.resolve()}", flush=True)
     print(f"Результат: {args.out.resolve()}", flush=True)
+    print(f"Части: {sorted(my_parts)} из {shard_n}" if shard_n > 1 else "Части: все видео", flush=True)
+    print(f"Кадр до {args.max_side}px, каждый {args.frame_step}-й кадр", flush=True)
     print(f"Выбрано видео: {total} | Классов: {sum(n > 0 for n in found.values())} | Процессов: {args.workers}", flush=True)
     print(f"Уже готовы: {stats['skip']} | Осталось обработать: {len(pending)}", flush=True)
-    if args.report_only and not args.dry_run:
-        publish_report()
-        print("Разметка и реестр обновлены. Извлечение не запускалось.", flush=True)
-        return 1 if missing else 0
     if not total:
         print("Нет видео для выбранного словаря. Проверь разметку и WORDS.", flush=True)
         return 1
-    if args.dry_run:
-        for wid, info in profiles.items():
-            print(f"{wid:>20} | {selected[wid][0]} | train={info['train']} test={info['test']} "
-                  f"people={len(info['users'])}", flush=True)
-        absent = sum(not video.is_file() for video, _ in pending)
-        print(f"Нужно извлечь: {len(pending)} | Нет исходного видео: {absent}", flush=True)
-        return 1 if missing or absent else 0
-    if missing:
-        print("Исправь словарь: часть меток не найдена в annotations.csv.", flush=True)
-        return 1
     if not pending:
-        publish_report()
         print(f"Готово: {total}/{total} (100%). Все файлы точек уже существуют.", flush=True)
         return 0
 
@@ -189,7 +233,6 @@ def main():
         else:
             print(line, flush=True)
 
-    publish_report()
     progress(force=True)
     ctx = mproc.get_context("spawn")
     try:
@@ -213,10 +256,6 @@ def main():
             print(flush=True)
         print("Обработка остановлена. Готовые файлы сохранятся и будут пропущены при следующем запуске.", flush=True)
         return 130
-    finally:
-        if tty:
-            print(flush=True)
-        publish_report()
 
     progress(force=True)
     if tty:
