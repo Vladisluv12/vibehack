@@ -9,31 +9,26 @@
 Запиши кружок в Telegram или видео на сайте — нейросеть найдёт руки, лицо и позу<br/>
 и переведёт жесты РЖЯ в текст за пару секунд.
 
-[![Telegram](https://img.shields.io/badge/Telegram-@zhestik__bot-26A5E4?style=for-the-badge&logo=telegram&logoColor=white)](https://t.me/zhestik_bot)
-[![Python](https://img.shields.io/badge/Python-3.12-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org/)
-[![PyTorch](https://img.shields.io/badge/PyTorch-CUDA-EE4C2C?style=for-the-badge&logo=pytorch&logoColor=white)](https://pytorch.org/)
-[![MediaPipe](https://img.shields.io/badge/MediaPipe-Holistic-0097A7?style=for-the-badge&logo=google&logoColor=white)](https://github.com/google-ai-edge/mediapipe)
+<br/>
 
-[![aiogram](https://img.shields.io/badge/aiogram-3-2CA5E0?style=flat-square)](https://docs.aiogram.dev/)
-[![FastAPI](https://img.shields.io/badge/FastAPI-web-009688?style=flat-square&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
-[![Dataset](https://img.shields.io/badge/dataset-Slovo-8A2BE2?style=flat-square)](https://github.com/hukenovs/slovo)
-[![Words](https://img.shields.io/badge/словарь-400%20жестов-FF7A59?style=flat-square)](#-словарь)
+<a href="https://t.me/zhestik_bot"><img src="https://img.shields.io/badge/Открыть_бота-@zhestik__bot-26A5E4?style=for-the-badge&logo=telegram&logoColor=white" alt="Telegram-бот"/></a>
+&nbsp;
+<a href="https://zhestik.example.ru"><img src="https://img.shields.io/badge/Открыть_сайт-Жестик-6C4CF5?style=for-the-badge&logo=googlechrome&logoColor=white" alt="Сайт"/></a>
 
-[**Попробовать бота**](https://t.me/zhestik_bot) · [**Демо**](#-демо) · [**Как это работает**](#-как-это-работает) · [**Быстрый старт**](#-быстрый-старт) · [**Обучение**](#-обучение-модели)
+<br/><br/>
+
+<img src="https://img.shields.io/badge/словарь-400_жестов-FF7A59?style=flat-square" alt="400 жестов"/>
+<img src="https://img.shields.io/badge/Python-3.12-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python"/>
+<img src="https://img.shields.io/badge/PyTorch-EE4C2C?style=flat-square&logo=pytorch&logoColor=white" alt="PyTorch"/>
+<img src="https://img.shields.io/badge/MediaPipe-Holistic-0097A7?style=flat-square" alt="MediaPipe"/>
+<img src="https://img.shields.io/badge/aiogram-3-2CA5E0?style=flat-square" alt="aiogram"/>
+<img src="https://img.shields.io/badge/FastAPI-009688?style=flat-square&logo=fastapi&logoColor=white" alt="FastAPI"/>
 
 </div>
 
 ---
 
 ## 🎬 Демо
-
-<div align="center">
-
-<!-- Видео: перетащи .mp4 в редактор README на GitHub — он вставит ссылку вида
-     https://github.com/user-attachments/assets/... — и замени строку ниже на неё. -->
-https://github.com/user-attachments/assets/REPLACE-WITH-DEMO-VIDEO-ID
-
-</div>
 
 <table>
   <tr>
@@ -68,10 +63,10 @@ https://github.com/user-attachments/assets/REPLACE-WITH-DEMO-VIDEO-ID
 |---|---|
 | 📹 **Кружки и видео** | Бот принимает кружки, видео и видеофайлы до 20 МБ, сайт — запись с веб-камеры и файлы до 50 МБ |
 | 🧩 **Фразы, а не только слова** | Длинное видео разбивается скользящим окном, жесты складываются во фразу: *«Привет, я рад»* |
-| 🎯 **Уверенность модели** | Для каждого слова — вероятность; если жест не распознан, показываются варианты |
+| 🎯 **Уверенность модели** | Для каждого слова — вероятность; если модель сомневается, показываются похожие варианты |
+| 📚 **400 жестов** | Словарь с поиском и алфавитным указателем — в боте и на сайте |
 | ⚡ **Работает на CPU** | Модель ~1–2 млн параметров, видеокарта нужна только для быстрого обучения |
-| 🌗 **Красивый веб-интерфейс** | Запись с отсчётом 3-2-1, история переводов, озвучка, тёмная тема |
-| 🔄 **Горячая замена модели** | Бот и сайт сами подхватывают новую модель после обучения — без перезапуска |
+| 🔄 **Горячая замена модели** | Бот и сайт сами подхватывают новую модель — без перезапуска |
 | 🖥️ **Распределённая подготовка данных** | Извлечение точек делится между несколькими ПК и собирается одной командой |
 
 ---
@@ -93,7 +88,7 @@ flowchart LR
     style E fill:#ff7a59,color:#fff,stroke:none
 ```
 
-**1. Скелет.** [MediaPipe Holistic](https://github.com/google-ai-edge/mediapipe) — готовая замороженная сеть от Google — находит в каждом кадре 140+ точек.
+**1. Скелет.** MediaPipe Holistic — готовая замороженная сеть от Google — находит в каждом кадре 140+ точек.
 
 **2. Признаки.** Точки нормализуются относительно плеч (неважно, где человек стоит и как далеко от камеры) и собираются в вектор из 425 чисел:
 
@@ -113,7 +108,7 @@ flowchart LR
 
 | `--arch` | Устройство |
 |---|---|
-| `gru` | Linear → BiGRU (2 слоя) → среднее по времени → классификатор. Базовая модель |
+| `gru` | Linear → BiGRU (2 слоя) → среднее по времени → классификатор |
 | `attn_gru` | Residual Conv1D-блоки → BiGRU → attention / mean / max pooling → MLP |
 | `transformer` | Позиционное кодирование → Transformer Encoder → attention / mean pooling |
 
@@ -123,19 +118,20 @@ flowchart LR
 
 ## 📊 Результаты
 
-> Заполни после финального `evaluate.py` — метрики лежат в `runs/.../test_metrics.json`.
+Текущая модель в боте и на сайте — `gru` на **401 классе** (400 жестов + «нет жеста»).
+Метрики на валидации из людей, которых модель не видела при обучении:
 
 | Словарь | Модель | Accuracy | Macro-F1 | Balanced acc. |
 |---|---|:---:|:---:|:---:|
-| 24 жеста | `gru` | — | — | — |
-| 400 жестов | `attn_gru` | — | — | — |
-| 400 жестов | `transformer` | — | — | — |
+| 400 жестов + «нет жеста» | `gru` | **56.7%** | **0.544** | **56.1%** |
+
+Для сравнения: случайное угадывание среди 401 класса — 0.25%. В обучающей части на каждый жест приходится всего ~10 примеров.
 
 ---
 
 ## 📚 Словарь
 
-Сейчас модель учится на **400 жестах** + класс «нет жеста» из датасета [Slovo](https://github.com/hukenovs/slovo) (SberDevices).
+**400 жестов** + класс «нет жеста» из открытого датасета Slovo (SberDevices).
 
 <details>
 <summary><b>Примеры слов</b></summary>
@@ -150,7 +146,7 @@ flowchart LR
 **Время:** сегодня · завтра · вчера · утро · вечер · понедельник … воскресенье
 **Оценки:** хорошо · плохо · очень · рад · вкусный · интересный
 
-Полный список — в боте (кнопка «📝 Список слов»), на сайте или в [`vocab.json`](src/translator/vocab.json).
+Полный список — в боте (кнопка «📝 Список слов»), на сайте или в `src/translator/vocab.json`.
 
 </details>
 
@@ -171,39 +167,43 @@ pip install -r requirements-training.txt
 pip install aiogram aiohttp-socks python-decouple fastapi "uvicorn[standard]" python-multipart
 ```
 
-> PyTorch ставится отдельно: [CUDA-сборка](https://pytorch.org/get-started/locally/) для обучения на GPU или `pip install torch --index-url https://download.pytorch.org/whl/cpu` для CPU.
+> PyTorch ставится отдельно: CUDA-сборка для обучения на GPU или `pip install torch --index-url https://download.pytorch.org/whl/cpu` для CPU.
 
-### 2. Telegram-бот
+### 2. Настройка
 
 Создай `.env` в корне проекта:
 
 ```env
-BOT_TOKEN=123456:ABC-твой-токен-от-BotFather
-TG_PROXY=socks5://127.0.0.1:12334   # необязательно: SOCKS-порт VPN-клиента
+BOT_TOKEN=123456:ABC-токен-от-BotFather
+TG_PROXY=socks5://127.0.0.1:12334
 ```
 
+`TG_PROXY` — необязательно, SOCKS-порт VPN-клиента, если Telegram недоступен напрямую.
+
+Модель, которую используют бот и сайт, лежит в `models/sign_gru.pt`.
+
+### 3. Бот и сайт одной командой
+
 ```bash
-python src/translator/bot.py --check   # проверить токен и связь без модели
-python src/translator/bot.py           # запустить бота
+bash run.sh
 ```
 
-### 3. Сайт
+Бот начнёт отвечать в Telegram, сайт откроется на `http://localhost:8000`. Ctrl+C останавливает оба.
+
+Или по отдельности:
 
 ```bash
-python src/web/app.py                  # → http://localhost:8000
+python src/translator/bot.py --check
+python src/translator/bot.py
+python src/web/app.py
 ```
 
-> Камера в браузере работает только на `localhost` или по `https`. Для доступа с телефона: `cloudflared tunnel --url http://localhost:8000`.
+> Камера в браузере работает только на `localhost` или по `https`.
 
-### 4. Вебка в реальном времени
-
-```bash
-python src/translator/realtime.py      # q — выход, c — очистить фразу
-```
-
-### 5. Распознать файл из консоли
+### 4. Вебка в реальном времени и распознавание файла
 
 ```bash
+python src/translator/realtime.py
 python src/translator/recognizer.py path/to/video.mp4
 ```
 
@@ -211,7 +211,7 @@ python src/translator/recognizer.py path/to/video.mp4
 
 ## 🏋️ Обучение модели
 
-<details open>
+<details>
 <summary><b>Полный цикл: от видео до модели</b></summary>
 
 <br/>
@@ -235,22 +235,26 @@ python src/translator/make_vocab.py --words-file src/translator/words_basic.txt 
 **4. Сборка** результатов на одном ПК:
 
 ```bash
-python src/translator/merge_kp.py pack                          # на каждом ПК
-python src/translator/merge_kp.py unpack data/kp_*.zip          # на главном
-python src/translator/merge_kp.py check                         # всё ли на месте
+python src/translator/merge_kp.py pack
+python src/translator/merge_kp.py unpack data/kp_*.zip
+python src/translator/merge_kp.py check
 ```
 
-**5. Обучение и подбор архитектуры:**
+**5. Обучение, подбор архитектуры и финальная оценка:**
 
 ```bash
-python src/translator/train.py --arch attn_gru --epochs 100 --patience 15 --device cuda
+python src/translator/train.py --arch gru --epochs 100 --patience 15 --device cuda
 python src/translator/experiments.py --space configs/search-small.json --method grid --trials 12 --folds 3 --device cuda --refit
 python src/translator/evaluate.py --model runs/search_<timestamp>/final/best.pt --device cuda
 ```
 
-</details>
+**6. Подключить новую модель** к боту и сайту:
 
-Подробно про флаги, кросс-валидацию и перебор гиперпараметров — в [**docs/TRAINING.md**](docs/TRAINING.md).
+```bash
+cp runs/<папка_запуска>/best.pt models/sign_gru.pt
+```
+
+</details>
 
 ---
 
@@ -258,6 +262,8 @@ python src/translator/evaluate.py --model runs/search_<timestamp>/final/best.pt 
 
 ```
 vibehack/
+├── run.sh                       # бот + сайт одной командой
+├── models/sign_gru.pt           # модель для бота и сайта
 ├── src/
 │   ├── translator/
 │   │   ├── features.py          # словарь, 425 признаков кадра, нормализация
@@ -271,7 +277,7 @@ vibehack/
 │   │   ├── evaluate.py          # финальная проверка на test
 │   │   ├── recognizer.py        # распознавание видеофайла (бот + сайт)
 │   │   ├── realtime.py          # распознавание с веб-камеры
-│   │   └── bot.py               # Telegram-бот @zhestik_bot
+│   │   └── bot.py               # Telegram-бот
 │   └── web/
 │       ├── app.py               # FastAPI-бэкенд
 │       └── static/index.html    # веб-интерфейс
@@ -289,27 +295,31 @@ vibehack/
 - [x] Распознавание изолированных жестов по ключевым точкам
 - [x] Telegram-бот: кружки, видео, фразы из нескольких жестов
 - [x] Веб-версия с записью с камеры
-- [x] Расширение словаря до 400 жестов, распределённое извлечение
+- [x] Словарь на 400 жестов, распределённое извлечение признаков
 - [ ] Перевод последовательности жестов в грамматичное русское предложение с помощью LLM
-- [ ] Распознавание прямо в браузере (MediaPipe JS + ONNX)
-- [ ] Дообучение на собственных записях и обратная связь от пользователей
-- [ ] Сравнение с видео-моделями (3D-CNN, VideoMAE)
+- [ ] Распознавание прямо в браузере
+- [ ] Дообучение на собственных записях
 
 ---
 
-
 ## 🙏 Благодарности
 
-- [**Slovo**](https://github.com/hukenovs/slovo) — открытый датасет русского жестового языка от SberDevices
-- [**MediaPipe**](https://github.com/google-ai-edge/mediapipe) — извлечение ключевых точек тела, рук и лица
-- [**aiogram**](https://docs.aiogram.dev/) и [**FastAPI**](https://fastapi.tiangolo.com/) — бот и веб-сервер
+- **Slovo** — открытый датасет русского жестового языка от SberDevices
+- **MediaPipe** — извлечение ключевых точек тела, рук и лица
+- **aiogram** и **FastAPI** — бот и веб-сервер
 
 <div align="center">
 
 <br/>
 
-Сделано с 💜 на хакатоне
+### Попробовать
 
-**[⬆ Наверх](#жестик-)**
+<a href="https://t.me/zhestik_bot"><img src="https://img.shields.io/badge/Telegram-@zhestik__bot-26A5E4?style=for-the-badge&logo=telegram&logoColor=white" alt="Telegram-бот"/></a>
+&nbsp;
+<a href="https://zhestik.example.ru"><img src="https://img.shields.io/badge/Сайт-Жестик-6C4CF5?style=for-the-badge&logo=googlechrome&logoColor=white" alt="Сайт"/></a>
+
+<br/>
+
+Сделано с 💜 на хакатоне «Вайбкодинг ФКН»
 
 </div>
