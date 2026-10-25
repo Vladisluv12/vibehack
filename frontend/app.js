@@ -523,7 +523,7 @@ function renderActivity(){
 }
 function applyExtension(){
   const link=$('queue-link'),name=extension.name||'Agent Control';
-  if(extension.connected){$('activity-panel').hidden=false;$('activity-state').textContent='Подключение к '+name+'…';return}
+  if(extension.connected){showFeed();$('activity-state').textContent='Подключение к '+name+'…';return}
   link.removeAttribute('href');link.setAttribute('aria-disabled','true');link.title='Agent Control не подключён';
   connection('Локально · без сети');
 }
@@ -541,7 +541,7 @@ async function pollActivity(){
       else if(item.call_id){callTargets.set(callKey,item);if(callTargets.size>256)callTargets.delete(callTargets.keys().next().value)}
       activityFeed.unshift(item);if(item.live&&item.target_id)touched.push(String(item.target_id));
     }
-    activityFeed=activityFeed.slice(0,40);if(touched.length)flash(touched);renderActivity();
+    activityFeed=activityFeed.slice(0,40);if(touched.length&&agentsOnGraph)flash(touched);renderActivity();
     $('activity-state').textContent=result.running?`${result.running} в работе`:'Нет активных задач';
     connection(result.running?`${result.running} агентов в работе`:'Локально · агенты на связи');
     if(result.omitted)$('activity-state').textContent+=' · поток сокращён';
@@ -607,7 +607,24 @@ function drawAgentTags(ctx){
   }
 }
 function postFrame(ctx,scale){drawAgents(ctx,scale);drawLabels(ctx,scale)}
+// Viewer preferences: show agents on the graph, keep the feed expanded.
+const pref=(key,fallback)=>{try{const v=localStorage.getItem('sb.'+key);return v===null?fallback:v==='1'}catch{return fallback}};
+const savePref=(key,value)=>{try{localStorage.setItem('sb.'+key,value?'1':'0')}catch{}};
+let agentsOnGraph=pref('agentsOnGraph',true),feedCollapsed=pref('feedCollapsed',false);
+function setAgentsOnGraph(on){
+  agentsOnGraph=on;savePref('agentsOnGraph',on);$('agents-toggle').setAttribute('aria-pressed',String(on));
+  if(!on){for(const agent of agents.values()){agent.queue=[];agent.pos=null;agent.trail=[];agent.alpha=0}for(const [id,f] of flashes)if(f.color)flashes.delete(id);redraw()}
+}
+function setFeedCollapsed(collapsed){feedCollapsed=collapsed;savePref('feedCollapsed',collapsed);showFeed()}
+function showFeed(){
+  const hasFeed=extension.connected||brainFeed.length>0;
+  $('activity-panel').hidden=!hasFeed||feedCollapsed;$('activity-mini').hidden=!hasFeed||!feedCollapsed;
+  const recent=brainFeed.filter(i=>Date.now()/1000-i.ts<60).length;$('activity-mini-count').textContent=recent?`${recent} за минуту`:String(brainFeed.length);
+}
+$('agents-toggle').onclick=()=>setAgentsOnGraph(!agentsOnGraph);
+$('activity-collapse').onclick=()=>setFeedCollapsed(true);$('activity-mini').onclick=()=>setFeedCollapsed(false);
 function animateEvent(item){
+  if(!agentsOnGraph)return;
   const agent=agentFor(item.actor),[first,...rest]=item.ids;
   if(item.type==='memory.search'){
     item.ids.forEach((id,i)=>setTimeout(()=>{pulse(id,agent.color,1700);keepAnimating(2000)},reduced?0:i*120));
@@ -624,7 +641,7 @@ let brainCursor=null,brainFeed=[],brainBusy=false;
 function renderBrainFeed(){
   if(extension.connected)return;
   const panel=$('activity-panel'),recent=brainFeed.filter(i=>Date.now()/1000-i.ts<60).length;
-  panel.hidden=!brainFeed.length;$('activity-feed').replaceChildren();
+  showFeed();$('activity-feed').replaceChildren();
   panel.querySelector('.activity-heading span').textContent='Обращения агентов';
   $('activity-state').textContent=recent?`${recent} за минуту`:'тихо';
   for(const item of brainFeed.slice(0,6)){
@@ -662,6 +679,7 @@ $('fit').onclick=()=>fit();
 initializeGraph();
 extension=await api('extension').catch(()=>({connected:false}));applyExtension();
 await api('settings').then(applySettings).catch(()=>{});
+$('agents-toggle').setAttribute('aria-pressed',String(agentsOnGraph));
 await load(true);await pollActivity();await pollBrainActivity();
 const initial=new URLSearchParams(location.hash.slice(1)).get('note');if(initial)openNote(initial);
 setInterval(()=>{if(!document.hidden)pollActivity()},1800);
