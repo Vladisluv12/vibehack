@@ -71,6 +71,7 @@
     <div class="segmented" role="group" aria-label="Цвет узлов"><button id="color-cluster" class="active" aria-pressed="true">Кластеры</button><button id="color-kind" aria-pressed="false">Типы</button></div>
     <div class="segmented" role="group" aria-label="Область"><button id="scope-all" class="active" aria-pressed="true">Весь граф</button><button id="scope-local" aria-pressed="false" disabled title="Сначала выберите заметку">Окружение</button></div>
     <div id="depth-group" class="segmented" role="group" aria-label="Глубина окружения" hidden><button id="depth-1" class="active" aria-pressed="true">1</button><button id="depth-2" aria-pressed="false">2</button></div>
+    <button id="agents-toggle" class="pill" aria-pressed="true" title="Показывать обращения агентов на графе: курсоры, пути, вспышки">◉ Агенты</button>
     <button id="semantic-toggle" class="pill" aria-pressed="true" title="Показать предложенные смысловые связи пунктиром">≈ Смысловые</button>
     <button id="fit" class="pill" title="Вписать граф">Вписать</button>
     <button id="tour" class="pill primary" aria-pressed="false" title="Автоматический обзор ключевых узлов">▶ Демо-тур</button>
@@ -85,7 +86,8 @@
   <form id="chat-form" class="chat-form"><textarea id="chat-input" rows="2" placeholder="Спросите о ваших заметках… (Enter — отправить)" maxlength="4000"></textarea><button type="submit" class="pill primary" aria-label="Отправить">↑</button></form>
 </aside>
 
-<section id="activity-panel" class="activity-panel" aria-label="События агентов" hidden><div class="activity-heading"><span>Вызовы агентов</span><small id="activity-state">Подключение…</small></div><div id="activity-feed" aria-live="off"></div></section>
+<section id="activity-panel" class="activity-panel" aria-label="События агентов" hidden><div class="activity-heading"><span>Вызовы агентов</span><small id="activity-state">Подключение…</small><button id="activity-collapse" class="ghost collapse" title="Свернуть ленту" aria-label="Свернуть ленту обращений">–</button></div><div id="activity-feed" aria-live="off"></div></section>
+<button id="activity-mini" class="activity-mini" hidden title="Показать ленту обращений агентов"><i aria-hidden="true"></i><span>Обращения агентов</span><small id="activity-mini-count"></small></button>
 <div id="notice" role="status" aria-live="polite"></div>
 
 <dialog id="create-dialog"><form id="create-form"><div class="dialog-head"><h2>Новая заметка</h2><button type="button" id="close-dialog" class="ghost" aria-label="Закрыть">✕</button></div><label for="create-title">Название</label><input id="create-title" name="title" required maxlength="200"><label for="create-kind">Тип</label><select id="create-kind" name="kind"><option value="note">Заметка</option><option value="research">Исследование</option><option value="decision">Решение</option><option value="concept">Понятие</option><option value="project">Проект</option></select><label for="create-tags">Теги</label><input id="create-tags" name="tags" placeholder="через запятую: поиск, project/alpha" autocomplete="off"><label for="create-body">Содержание · Markdown</label><textarea id="create-body" name="body" required maxlength="500000"></textarea><p class="hint">Новая запись появится со статусом «Предложено». Для связи используйте [[название заметки]], тег можно поставить и прямо в тексте: #идея.</p><button type="submit" class="pill primary">Создать заметку</button></form></dialog>
