@@ -9,15 +9,13 @@ from __future__ import annotations
 import json
 import time
 
-from .learning import MAX_LIST, clean_ids, clean_text, error_signature
+from .learning import MAX_LIST, clean_ids, clean_run_id, clean_text, error_signature
 
 LONG_STEPS = 8
 
 
 def _run_id(value):
-    if not isinstance(value, str) or not value.strip() or len(value) > 100:
-        raise ValueError('run_id must be a non-empty string of at most 100 characters')
-    return clean_text(value, 100)
+    return clean_run_id(value)
 
 
 def _clean_event(event):

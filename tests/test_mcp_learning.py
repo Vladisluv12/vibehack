@@ -72,7 +72,13 @@ class GatewayTests(unittest.TestCase):
         self.assertEqual(search(self.brain, self.learning, 'термин')['items'][0]['id'] in notes, True)
         self.assertEqual(self.learning.db.execute("SELECT count(*) FROM served WHERE run_id=''").fetchone()[0], 0)
         with self.assertRaises(ValueError):
-            self.learning.report_usage('r1', [], 'great')
+            self.learning.report_usage('r9', [], 'great')
+        # Forged or repeated reports change nothing.
+        self.assertFalse(self.learning.report_usage('r1', [notes[1]], 'success')['recorded'])
+        self.assertEqual(self.learning.report_usage('invented', [notes[1]], 'success')['recorded'], False)
+        search(self.brain, self.learning, 'термин', run_id='r6', agent_model='qwen')
+        self.assertEqual(self.learning.report_usage('r6', [notes[1]], 'success', model='other')['recorded'], False)
+        self.assertEqual(self.learning.usefulness(notes[1])['helped_runs'], 0)
 
     def test_server_takes_tier_from_host_file_and_writes_as_agent(self):
         (self.root/'state'/'agents.json').write_text(json.dumps({'models': {'qwen3.8-flash': 'weak'}}))

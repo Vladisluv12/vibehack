@@ -138,7 +138,7 @@ def build(vault: Path, state: Path, agent_model: str = ''):
     @mcp.tool(annotations={'readOnlyHint': False, 'destructiveHint': False, 'openWorldHint': False})
     def report_usage(run_id: str, used_ids: list[str], outcome: str) -> dict:
         """After a task: which served notes you actually relied on, and outcome success|failure|unknown."""
-        return learning.report_usage(run_id, used_ids, outcome)
+        return learning.report_usage(run_id, used_ids, outcome, agent_model)
 
     @mcp.tool(annotations={'readOnlyHint': True, 'destructiveHint': False, 'openWorldHint': False})
     def get_skill_pack(task: str, run_id: str) -> dict:

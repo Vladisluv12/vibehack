@@ -100,9 +100,23 @@ class TierTests(unittest.TestCase):
         learning.close()
 
     def test_bad_agents_file_is_rejected(self):
-        (self.state/'agents.json').write_text(json.dumps({'models': {'x': 'genius'}}))
-        with self.assertRaises(ValueError):
-            load_agents(self.state)
+        for data in ({'models': {'x': 'genius'}}, {'models': {}, 'default': 'weak'}):
+            (self.state/'agents.json').write_text(json.dumps(data))
+            with self.assertRaises(ValueError):
+                load_agents(self.state)
+
+    def test_interrupted_migration_leaves_no_half_schema(self):
+        import sqlite3
+        from second_brain import learning as module
+        broken = {1: module.MIGRATIONS[1][:2] + ['CREATE TABLE served (x)'], 2: module.MIGRATIONS[2]}
+        with mock.patch.object(module, 'MIGRATIONS', broken):
+            with self.assertRaises(sqlite3.OperationalError):
+                Learning(self.state)
+        db = sqlite3.connect(self.state/'learning.sqlite')
+        self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0], 0)
+        self.assertEqual(db.execute("SELECT count(*) FROM sqlite_master WHERE name='served'").fetchone()[0], 0)
+        db.close()
+        Learning(self.state).close()
 
     def test_mechanisms_start_off_and_frontier_cannot_auto_reflect(self):
         learning = Learning(self.state)
@@ -115,7 +129,7 @@ class TierTests(unittest.TestCase):
 
     def test_schema_is_versioned(self):
         learning = Learning(self.state)
-        self.assertEqual(learning.db.execute('PRAGMA user_version').fetchone()[0], 1)
+        self.assertEqual(learning.db.execute('PRAGMA user_version').fetchone()[0], 2)
         learning.close()
         Learning(self.state).close()  # reopening does not re-run migrations
 

@@ -40,7 +40,7 @@ class EvalTests(unittest.TestCase):
     def stored_batch(self, name, successes, *, tokens=10, seconds=2.0, ts=1, ids=None, signature='failure', tier='weak'):
         with self.learning.db:
             for index, success in enumerate(successes):
-                self.learning.db.execute('INSERT INTO eval_results VALUES (?,?,?,?,?,?,?,?,?,?)',
+                self.learning.db.execute('INSERT INTO eval_results (batch, task_id, tier, config, agent_model, success, tokens, seconds, signature, ts) VALUES (?,?,?,?,?,?,?,?,?,?)',
                                          (name, ids[index] if ids else f'task-{index:03}', tier, 'A', 'fake',
                                           int(success), tokens, seconds, '' if success else signature, ts))
         return name

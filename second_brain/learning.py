@@ -15,7 +15,7 @@ import time
 
 from .redact import redact
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 TIERS = ('weak', 'frontier')
 DEFAULT_TIER = 'frontier'  # unknown models get no automatic self-improvement
 MECHANISMS = ('skills', 'reflection')
@@ -23,24 +23,25 @@ MAX_TEXT = 4000
 MAX_LIST = 50
 
 MIGRATIONS = {
-    1: """
-    CREATE TABLE served (run_id TEXT, note_id TEXT, tool TEXT, agent_model TEXT, ts REAL);
-    CREATE INDEX served_note ON served(note_id);
-    CREATE TABLE usage (run_id TEXT, note_id TEXT, helped INTEGER, outcome TEXT, ts REAL,
-      PRIMARY KEY(run_id, note_id));
-    CREATE TABLE runs (run_id TEXT PRIMARY KEY, agent_model TEXT, tier TEXT, origin TEXT,
-      outcome TEXT, steps INTEGER, data TEXT, ts REAL);
-    CREATE TABLE signatures (signature TEXT, run_id TEXT, outcome TEXT, ts REAL,
-      PRIMARY KEY(signature, run_id));
-    CREATE TABLE triggers (run_id TEXT, event TEXT, target_tier TEXT, status TEXT, detail TEXT, ts REAL,
-      PRIMARY KEY(run_id, event));
-    CREATE TABLE mechanisms (tier TEXT, name TEXT, enabled INTEGER, reason TEXT, actor TEXT, ts REAL,
-      PRIMARY KEY(tier, name));
-    CREATE TABLE rollout (skill_id TEXT PRIMARY KEY, stage TEXT, ts REAL);
-    CREATE TABLE eval_results (batch TEXT, task_id TEXT, tier TEXT, config TEXT, agent_model TEXT,
-      success INTEGER, tokens INTEGER, seconds REAL, signature TEXT, ts REAL);
-    """,
+    1: [
+        'CREATE TABLE served (run_id TEXT, note_id TEXT, tool TEXT, agent_model TEXT, ts REAL)',
+        'CREATE INDEX served_note ON served(note_id)',
+        'CREATE TABLE usage (run_id TEXT, note_id TEXT, helped INTEGER, outcome TEXT, ts REAL, PRIMARY KEY(run_id, note_id))',
+        'CREATE TABLE runs (run_id TEXT PRIMARY KEY, agent_model TEXT, tier TEXT, origin TEXT, outcome TEXT, '
+        'steps INTEGER, data TEXT, ts REAL)',
+        'CREATE TABLE signatures (signature TEXT, run_id TEXT, outcome TEXT, ts REAL, PRIMARY KEY(signature, run_id))',
+        'CREATE TABLE triggers (run_id TEXT, event TEXT, target_tier TEXT, status TEXT, detail TEXT, ts REAL, '
+        'PRIMARY KEY(run_id, event))',
+        'CREATE TABLE mechanisms (tier TEXT, name TEXT, enabled INTEGER, reason TEXT, actor TEXT, ts REAL, '
+        'PRIMARY KEY(tier, name))',
+        'CREATE TABLE rollout (skill_id TEXT PRIMARY KEY, stage TEXT, ts REAL)',
+        'CREATE TABLE eval_results (batch TEXT, task_id TEXT, tier TEXT, config TEXT, agent_model TEXT, '
+        'success INTEGER, tokens INTEGER, seconds REAL, signature TEXT, ts REAL)',
+    ],
+    # Batches are comparable only on identical task definitions and inputs.
+    2: ['ALTER TABLE eval_results ADD COLUMN task_hash TEXT'],
 }
+RUN_ID = re.compile(r'^[A-Za-z0-9_.:-]{1,100}$')
 
 
 def load_agents(state: Path) -> dict:
@@ -54,9 +55,10 @@ def load_agents(state: Path) -> dict:
     data = json.loads(path.read_text(encoding='utf-8'))
     models = data.get('models', {}) if isinstance(data, dict) else None
     default = data.get('default', DEFAULT_TIER) if isinstance(data, dict) else None
-    if not isinstance(models, dict) or default not in TIERS or any(
-            not isinstance(k, str) or v not in TIERS for k, v in models.items()):
+    if not isinstance(models, dict) or any(not isinstance(k, str) or v not in TIERS for k, v in models.items()):
         raise ValueError('agents.json: models must map model ids to "weak" or "frontier"')
+    if default != DEFAULT_TIER:
+        raise ValueError('agents.json: unknown models are always "frontier"; list weak models explicitly')
     return {'models': dict(models), 'default': default}
 
 
@@ -80,6 +82,13 @@ def clean_text(value, limit=MAX_TEXT) -> str:
     return redact(value)[:limit] if isinstance(value, str) else ''
 
 
+def clean_run_id(value) -> str:
+    """Run ids are opaque host/agent labels, never free text that could carry a secret."""
+    if not isinstance(value, str) or not RUN_ID.fullmatch(value) or redact(value) != value:
+        raise ValueError('run_id must be 1-100 characters of letters, digits and _.:-')
+    return value
+
+
 def clean_ids(value) -> list:
     if not isinstance(value, list):
         return []
@@ -100,13 +109,28 @@ class Learning:
         self.db.close()
 
     def migrate(self):
-        version = self.db.execute('PRAGMA user_version').fetchone()[0]
-        if version > SCHEMA_VERSION:
-            raise ValueError(f'learning.sqlite schema {version} is newer than this code ({SCHEMA_VERSION})')
-        for step in range(version + 1, SCHEMA_VERSION + 1):
-            with self.db:
-                self.db.executescript(MIGRATIONS[step])
-                self.db.execute(f'PRAGMA user_version={step}')
+        """One serialized transaction per step: concurrent first starts and crashes
+        mid-step cannot leave a half-built schema behind."""
+        level, self.db.isolation_level = self.db.isolation_level, None
+        try:
+            while True:
+                self.db.execute('BEGIN IMMEDIATE')
+                try:
+                    version = self.db.execute('PRAGMA user_version').fetchone()[0]
+                    if version > SCHEMA_VERSION:
+                        raise ValueError(f'learning.sqlite schema {version} is newer than this code ({SCHEMA_VERSION})')
+                    if version == SCHEMA_VERSION:
+                        self.db.execute('COMMIT')
+                        return
+                    for statement in MIGRATIONS[version + 1]:
+                        self.db.execute(statement)
+                    self.db.execute(f'PRAGMA user_version={version + 1}')
+                    self.db.execute('COMMIT')
+                except BaseException:
+                    self.db.execute('ROLLBACK')
+                    raise
+        finally:
+            self.db.isolation_level = level
 
     def tier(self, model):
         return tier_of(self.agents, model)
@@ -133,23 +157,32 @@ class Learning:
     def served(self, run_id, note_ids, tool, model):
         if not run_id:
             return
-        now = time.time()
+        run_id, now = clean_run_id(run_id), time.time()
         with self.db:
             self.db.executemany('INSERT INTO served VALUES (?,?,?,?,?)',
-                                [(run_id, n, tool, model or '', now) for n in note_ids])
+                                [(run_id, n, tool, model or '', now) for n in clean_ids(list(note_ids))])
 
-    def report_usage(self, run_id, used_ids, outcome):
-        """What the agent actually relied on, out of what it was served in this run."""
-        if not isinstance(run_id, str) or not run_id or outcome not in ('success', 'failure', 'unknown'):
-            raise ValueError('report_usage needs run_id and outcome success|failure|unknown')
+    def report_usage(self, run_id, used_ids, outcome, model=''):
+        """What the agent relied on, out of what this same model was served in this run.
+
+        Notes it was not served are ignored, and the first report for a run stands:
+        a later call cannot rewrite it or another model's run.
+        """
+        run_id = clean_run_id(run_id)
+        if outcome not in ('success', 'failure', 'unknown'):
+            raise ValueError('outcome must be success, failure or unknown')
         used = set(clean_ids(used_ids))
-        served = {r['note_id'] for r in self.db.execute('SELECT DISTINCT note_id FROM served WHERE run_id=?', (run_id,))}
+        served = {r['note_id'] for r in self.db.execute(
+            'SELECT DISTINCT note_id FROM served WHERE run_id=? AND agent_model=?', (run_id, model or ''))}
+        if self.db.execute('SELECT 1 FROM usage WHERE run_id=? LIMIT 1', (run_id,)).fetchone():
+            return {'run_id': run_id, 'recorded': False, 'reason': 'usage already reported for this run'}
         now = time.time()
         with self.db:
-            for note in served | used:
-                self.db.execute('INSERT OR REPLACE INTO usage VALUES (?,?,?,?,?)',
+            for note in served:
+                self.db.execute('INSERT OR IGNORE INTO usage VALUES (?,?,?,?,?)',
                                 (run_id, note, int(note in used), outcome, now))
-        return {'run_id': run_id, 'served': len(served), 'used': len(used & served), 'unserved_used': len(used - served)}
+        return {'run_id': run_id, 'recorded': bool(served), 'served': len(served), 'used': len(used & served),
+                'ignored_unserved': len(used - served)}
 
     def usefulness(self, note_id):
         served = self.db.execute('SELECT count(DISTINCT run_id) FROM served WHERE note_id=?', (note_id,)).fetchone()[0]

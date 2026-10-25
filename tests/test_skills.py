@@ -124,12 +124,13 @@ class SkillsTests(unittest.TestCase):
         secret = 'ghp_abcdefghijklmnopqrstuvwxyz'
         ident = self.skill(body='build password=private-value ' + secret)
         promote(self.learning, ident, 'full', 'human:test')
-        pack = self.pack(tier='frontier', run_id='password=private-value')
+        with self.assertRaises(ValueError):  # a run id is a label, never text that may carry a secret
+            self.pack(tier='frontier', run_id='password=private-value')
+        pack = self.pack(tier='frontier', run_id='run-1')
         self.assertEqual(pack['skill_ids'], [ident])
         self.assertNotIn(secret, pack['text'])
         self.assertNotIn('private-value', pack['text'])
-        stored = self.learning.db.execute('SELECT run_id FROM served').fetchone()[0]
-        self.assertNotIn('private-value', stored)
+        self.assertEqual(self.learning.db.execute('SELECT run_id FROM served').fetchone()[0], 'run-1')
 
     def test_promotion_is_audited_and_never_changes_a_note_or_mechanism(self):
         ident = self.skill(review='proposed')

@@ -168,12 +168,12 @@ class ReviewerTests(unittest.TestCase):
         self.assertEqual(self.status('second')['status'], 'pending')
         # Equal-length run IDs give the same prompt lengths despite fresh delimiters.
         used = sum(map(len, self.prompts)) + len('A reported build error was corrected.') + len('{"action":"noop"}')
-        self.run_event('third!')
+        self.run_event('third')
         self.prompts.clear()
         result = review_pending(self.brain, self.learning, self.llm('{"action":"noop"}'), budget_chars=used + 4)
         self.assertEqual(len(result), 1)
         self.assertEqual(len(self.prompts), 2)
-        self.assertEqual(self.status('third!')['status'], 'pending')
+        self.assertEqual(self.status('third')['status'], 'pending')
 
     def test_redacts_run_model_output_and_provider_errors(self):
         secret = 'ghp_abcdefghijklmnopqrstuvwxyz'
