@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+/vault/
+/var/
+/node_modules/
+.env
+*.sqlite
+*.sqlite-*

@@ -1,0 +1,125 @@
+import json
+from pathlib import Path
+import tempfile
+import unittest
+import zipfile
+
+from second_brain.brain import Brain, digest, restore_backup
+
+
+class BrainTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp.name)
+        self.brain = Brain(self.root/'vault', self.root/'state')
+
+    def tearDown(self):
+        self.brain.close()
+        self.temp.cleanup()
+
+    def test_provenance_dedup_graph_search_external_edit(self):
+        project = self.brain.create('Проект Steam', 'Трекер цен', kind='project', key='project')
+        source = self.root/'research.md'
+        source.write_text('# Документ\n## Кэш\nКэширование результатов\n')
+        result = self.brain.import_markdown(source, split=True, links=[project])
+        self.assertEqual(result, self.brain.import_markdown(source, split=True, links=[project]))
+        self.assertEqual(self.brain.sync()['notes'], 3)
+        self.assertEqual(self.brain.list('Кэширование')['total'], 2)
+        self.assertEqual(len(self.brain.graph()['links']), 3)
+        note = self.brain.get(result['id'])
+        self.assertEqual(note['meta']['source_hash'], digest(source.read_bytes()))
+        self.assertEqual(note['review'], 'unreviewed')
+        p = self.brain.vault/note['path'];p.write_text(p.read_text()+'\nНовая мысль')
+        self.brain.sync()
+        self.assertEqual(self.brain.list('мысль')['total'], 1)
+
+    def test_edit_conflict_secrets_and_path_safety(self):
+        ident = self.brain.create('Заметка', 'original');self.brain.sync()
+        note = self.brain.get(ident)
+        (self.brain.vault/note['path']).write_text(note['content']+'external')
+        with self.assertRaisesRegex(ValueError, 'Conflict'):
+            self.brain.edit(ident, note['content']+'edit', note['hash'])
+        with self.assertRaises(ValueError):
+            self.brain.edit(ident, note['content']+' API_KEY=sk-abcdefghijkl', note['hash'])
+        for path in ('../outside.md', '/tmp/outside.md', '.hidden/n.md'):
+            with self.assertRaises(ValueError):self.brain.safe(path)
+        (self.brain.vault/'escape').symlink_to(self.root, target_is_directory=True)
+        with self.assertRaises(ValueError):self.brain.safe('escape/outside.md')
+
+    def test_backup_roundtrip_and_traversal(self):
+        self.brain.create('Локальная память', 'Важный вывод')
+        backup = self.brain.backup()
+        result = restore_backup(backup['path'], self.root/'restored')
+        self.assertEqual(result['notes'],1)
+        a = next(self.brain.vault.rglob('*.md')).read_bytes()
+        self.assertEqual(a,next((self.root/'restored').rglob('*.md')).read_bytes())
+        with self.assertRaises(ValueError):restore_backup(backup['path'],self.root/'restored')
+        bad=self.root/'bad.zip'
+        with zipfile.ZipFile(bad,'w') as z:
+            z.writestr('../bad.md','bad');z.writestr('manifest.json',json.dumps({'../bad.md':digest('bad')}))
+        with self.assertRaises(ValueError):restore_backup(bad,self.root/'unsafe')
+        self.assertFalse((self.root/'unsafe').exists())
+
+    def test_pagination_ambiguous_link_and_duplicate_ids(self):
+        for i in range(3):self.brain.create('Same',str(i))
+        self.brain.create('Link','- relates_to [[Same]]')
+        report=self.brain.sync();self.assertEqual(report['warning_count'],1)
+        self.assertEqual(self.brain.list(limit=2)['next'],2)
+        self.assertEqual(len(self.brain.list(offset=2,limit=2)['items']),2)
+        p=next(self.brain.vault.rglob('*.md'))
+        (self.brain.vault/'duplicate.md').write_text(p.read_text())
+        with self.assertRaisesRegex(ValueError,'Duplicate'):self.brain.sync()
+
+    def test_rename_reimport_preserves_id_and_user_edits(self):
+        ident=self.brain.create('Stable','before',key='stable');self.brain.sync()
+        old=self.brain.vault/self.brain.get(ident)['path']
+        moved=self.brain.vault/'Renamed.md';old.rename(moved)
+        moved.write_text(moved.read_text()+'\nUser edit')
+        self.assertEqual(self.brain.create('Stable','before',key='stable'),ident)
+        self.assertEqual(self.brain.sync()['notes'],1)
+        self.assertIn('User edit',self.brain.get(ident)['body'])
+
+    def test_invalid_scalar_metadata_and_nested_fences(self):
+        (self.brain.vault/'external.md').write_text('---\ntype: []\nreview: {}\n---\nBody')
+        victim=self.brain.create('Victim','real')
+        self.brain.create('Transcript','Example\n```\n[[Victim]]',kind='session',key='fence')
+        self.assertEqual(self.brain.sync()['notes'],3)
+        self.assertEqual(self.brain.graph()['links'],[])
+
+    def test_byte_exact_crlf_hash_backup_and_versions(self):
+        source=self.root/'crlf.md';source.write_bytes(b'# Source\r\n\r\nOriginal\r\n')
+        ident=self.brain.import_markdown(source)['id'];self.brain.sync()
+        self.assertEqual(self.brain.get(ident)['meta']['raw_sha256'],digest(source.read_bytes()))
+        note=self.brain.get(ident)
+        self.brain.edit(ident,note['content']+'\nEdit',note['hash'])
+        version=next((self.brain.vault/'Versions').rglob('*.md'))
+        self.assertEqual(version.read_bytes(),note['content'].encode())
+        self.assertEqual(self.brain.sync()['notes'],1)
+        backup=self.brain.backup();restore_backup(backup['path'],self.root/'restored')
+        for p in self.brain.vault.rglob('*.md'):
+            self.assertEqual(p.read_bytes(),(self.root/'restored'/p.relative_to(self.brain.vault)).read_bytes())
+
+    def test_bm25_title_ranking(self):
+        best=self.brain.create('Qdrant retrieval','Exact match')
+        self.brain.create('AAA other','many unrelated words '*150+' Qdrant retrieval')
+        self.brain.sync()
+        self.assertEqual(self.brain.list('Qdrant retrieval')['items'][0]['id'],best)
+        self.assertIn('score',self.brain.list('Qdrant')['items'][0])
+
+    def test_project_owners_use_only_explicit_links_or_metadata(self):
+        a=self.brain.create('A','',kind='project',source='file:///work/a')
+        b=self.brain.create('B','',kind='project')
+        direct=self.brain.create('Direct','',links=[a])
+        both=self.brain.create('Both','',links=[a,b])
+        meta=self.brain.create('Meta','',extra={'project':'/work/a'})
+        self.brain.create('Loose','mentions A')
+        self.brain.sync()
+        nodes={n['title']:n for n in self.brain.graph()['nodes']}
+        self.assertEqual(nodes['Direct']['project_id'],a)
+        self.assertEqual(nodes['Meta']['project_id'],a)
+        self.assertIsNone(nodes['Both']['project_id'])
+        self.assertIsNone(nodes['Loose']['project_id'])
+        self.assertEqual(nodes['A']['project_materials'],3)
+
+
+if __name__ == '__main__':unittest.main()
