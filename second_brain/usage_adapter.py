@@ -12,6 +12,7 @@ every step_finish carries that step's tokens).
 """
 import argparse
 import json
+import os
 import subprocess
 import sys
 
@@ -65,7 +66,8 @@ def main(argv=None):
     command = args.command[1:] if args.command[:1] == ['--'] else args.command
     if not command:
         parser.error('command to run is required after --')
-    done = subprocess.run(command, stdin=sys.stdin, capture_output=True, text=True, shell=False)
+    done = subprocess.run(command, stdin=sys.stdin, capture_output=True, text=True, shell=False,
+                          env={**os.environ, 'PWD': os.getcwd()})  # agent CLIs read their project root from PWD
     sys.stderr.write(done.stdout)
     sys.stderr.write(done.stderr)
     count = tokens(done.stdout, args.format)

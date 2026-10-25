@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
 from pathlib import Path
 import random
 import re
@@ -207,9 +208,11 @@ def _text(value):
 
 def _run(argv, workspace, timeout):
     try:
+        # cwd alone leaves the parent's PWD, and agent CLIs (OpenCode) take their project root
+        # from PWD: the agent then works in the caller's repository and can read the oracle.
         done = subprocess.run(argv, cwd=workspace, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                               stderr=subprocess.PIPE, encoding='utf-8', errors='replace',
-                              timeout=timeout, check=False, shell=False)
+                              timeout=timeout, check=False, shell=False, env={**os.environ, 'PWD': str(workspace)})
         return dict(returncode=done.returncode, stdout=done.stdout, stderr=done.stderr, timed_out=False)
     except subprocess.TimeoutExpired as exc:
         return dict(returncode=None, stdout=_text(exc.stdout), stderr=_text(exc.stderr) + '\ncommand timed out',

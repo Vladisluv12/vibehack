@@ -5,12 +5,15 @@ to stdin, the answer is read from stdout.
 """
 import hashlib
 import json
+import os
+import re
 from pathlib import Path
 import subprocess
+import tempfile
 
 from . import evals, lint, reflection, reviewer, skills
 from .brain import Brain
-from .learning import MECHANISMS, TIERS, Learning
+from .learning import MECHANISMS, TIERS, Learning, clean_text
 
 COMMANDS = {'lint', 'ingest-run', 'reflect-request', 'review', 'skill-pack', 'promote', 'stale',
             'eval-lock', 'eval-run', 'eval-metrics', 'eval-decide'}
@@ -47,14 +50,23 @@ def add_commands(cmds):
     c.add_argument('--tier', choices=TIERS, required=True); c.add_argument('--mechanism', choices=MECHANISMS, required=True)
 
 
+class LLMCommandFailed(ValueError):
+    """The model CLI exited non-zero; the message carries a redacted stderr tail."""
+
+
 def llm_command(argv, timeout):
     if not isinstance(argv, list) or not argv or not all(isinstance(a, str) for a in argv):
         raise ValueError('LLM config must be a JSON list of strings')
 
     def call(prompt):
-        done = subprocess.run(argv, input=prompt, capture_output=True, text=True, timeout=timeout, shell=False)
+        # An empty scratch directory: a model CLI with file tools must not reach the vault or repository.
+        with tempfile.TemporaryDirectory(prefix='second-brain-review-') as scratch:
+            done = subprocess.run(argv, input=prompt, capture_output=True, text=True, timeout=timeout, shell=False,
+                                  cwd=scratch, env={**os.environ, 'PWD': scratch})
         if done.returncode != 0:
-            raise ValueError('LLM command failed')
+            plain = re.sub(r'\x1b\[[0-9;]*[A-Za-z]', '', done.stderr or done.stdout)  # terminal colours
+            tail = ' '.join(clean_text(plain, 4000).split())[-200:]
+            raise LLMCommandFailed(f'LLM command failed (exit {done.returncode}): {tail}')
         return done.stdout
     return call
 

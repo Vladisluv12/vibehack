@@ -207,7 +207,8 @@ def review_pending(brain, learning, llm, *, limit=5, budget_chars=60000) -> list
         except Exception as exc:
             # Provider/JSON exception strings can contain raw replies or credentials.
             # Keep a bounded reason without persisting that untrusted exception text.
-            reason = str(exc) if type(exc) is ValueError and str(exc) in {
+            # A failed model command reports its exit code and a redacted stderr tail.
+            reason = str(exc) if type(exc).__name__ == 'LLMCommandFailed' else str(exc) if type(exc) is ValueError and str(exc) in {
                 'Invalid consolidation JSON', 'Unknown consolidation action',
                 'Consolidation must contain only the declared JSON fields',
                 'A skill needs title, body, applies_to and evidence',

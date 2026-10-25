@@ -3,11 +3,13 @@ skill pack → A/B evaluation. Fake model and agent scripts, no network."""
 import contextlib
 import io
 import json
+import os
 from pathlib import Path
 import shutil
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 from second_brain.brain import Brain
 from second_brain.cli import main
@@ -146,6 +148,45 @@ class LearningLoopTests(unittest.TestCase):
                                           '--workspace', '{workspace}'])
         result = self.cli('eval-run', '--tasks', str(tasks), '--config', 'B', '--model', 'qwen-small', '--agent', str(agent))
         self.assertEqual(result['tasks'], 1)
+
+    def test_agents_and_reviewer_run_where_they_are_told_even_if_they_trust_pwd(self):
+        tasks = self.root / 'evals' / 'tasks'
+        shutil.copytree(FIXTURES / 'tasks', tasks)
+        shutil.copytree(FIXTURES / 'workspace', self.root / 'evals' / 'workspace')
+        self.cli('eval-lock', str(tasks))
+        # Like OpenCode: the project root comes from $PWD, not from the process cwd.
+        copy = ("import os, shutil; d = os.environ['PWD']; "
+                "shutil.copy(os.path.join(d, 'expected.txt'), os.path.join(d, 'answer.txt'))")
+        for name, argv in (('direct', [sys.executable, '-c', copy]),
+                           ('adapter', [sys.executable, '-m', 'second_brain.usage_adapter', '--format', 'opencode', '--',
+                                        sys.executable, '-c', copy])):
+            agent = self.write(f'{name}.json', argv)
+            with mock.patch.dict(os.environ, {'PWD': str(self.root), 'PYTHONPATH': str(Path(__file__).parent.parent)}):
+                result = self.cli('eval-run', '--tasks', str(tasks), '--config', 'A', '--model', 'qwen-small', '--agent', str(agent))
+            self.assertEqual(result['success_rate'], 1.0, name)
+            self.assertFalse((self.root / 'answer.txt').exists(), name)
+        spy = self.write('spy.py', "import os, json, sys; sys.stdin.read(); open('touched.txt', 'w').write('x'); "
+                                   "print(json.dumps({'action': 'noop', 'body': os.getcwd() + '|' + os.environ['PWD']}))")
+        self.cli('mechanism', '--tier', 'weak', '--name', 'reflection', '--on', '--reason', 'test')
+        self.cli('ingest-run', '--model', 'qwen-small', str(self.write('r.json', {
+            'run_id': 'r1', 'task': 't', 'outcome': 'success', 'user_correction': True})))
+        llm = self.write('spy.json', [sys.executable, str(spy)])
+        with mock.patch.dict(os.environ, {'PWD': str(self.root)}):
+            done = self.cli('review', '--llm', str(llm), '--llm-model', 'spy')
+        cwd, pwd = done[0]['reason'].split('|')
+        self.assertEqual(cwd, pwd)
+        self.assertNotEqual(Path(cwd), self.root)
+        self.assertFalse((self.root / 'touched.txt').exists())
+
+    def test_a_failing_model_command_is_reported_with_its_reason(self):
+        self.cli('mechanism', '--tier', 'weak', '--name', 'reflection', '--on', '--reason', 'test')
+        self.cli('ingest-run', '--model', 'qwen-small', str(self.write('r.json', {
+            'run_id': 'r1', 'task': 't', 'outcome': 'success', 'user_correction': True})))
+        broken = self.write('broken.py', "import sys; sys.stdin.read(); "
+                                         "sys.stderr.write('\\x1b[91mError: \\x1b[0mFree usage limit reached'); sys.exit(1)")
+        done = self.cli('review', '--llm', str(self.write('broken.json', [sys.executable, str(broken)])), '--llm-model', 'x')
+        self.assertEqual(done[0]['status'], 'failed')
+        self.assertEqual(done[0]['reason'], 'LLM command failed (exit 1): Error: Free usage limit reached')
 
 
 if __name__ == '__main__':
