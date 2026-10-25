@@ -14,3 +14,4 @@
 @media(max-width:600px){.map-toolbar select{max-width:175px}.map-toolbar{bottom:108px}.map-panel{min-height:860px;height:860px}.activity-panel{bottom:235px}.workspace.map-expanded>.map-panel{min-height:860px}}
 
 .project-values{display:grid;gap:12px;padding:15px 0;border-top:1px solid #30364b;border-bottom:1px solid #30364b;margin-bottom:18px}.project-values>div{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap}.project-values span{color:#9ca7bb;font-size:12px}.project-values strong{font-size:12px;overflow-wrap:anywhere}.project-values .hint{margin:0}
+.top nav a[aria-disabled="true"]{opacity:.45;cursor:not-allowed}.top nav a[aria-disabled="true"]:hover{background:none}

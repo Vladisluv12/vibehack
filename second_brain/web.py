@@ -11,17 +11,38 @@ from .brain import Brain
 from .redact import redact
 
 HERE = Path(__file__).parent
-# The prebuilt panel polls agent activity and project checkpoints; standalone
-# Second Brain has neither, so these answer with honest empty snapshots.
-EMPTY = {'/api/activity': {'initial': True, 'cursor': 0, 'items': [], 'running': 0, 'tasks': []},
-         '/api/project-metrics': {'projects': []}}
 
 
-def make_server(vault, state, port=8765):
+class Extension:
+    """Optional plugin slot, e.g. Agent Control. The brain never imports it.
+
+    `get`/`post` return None for paths they do not own. `pages` are extra HTML
+    documents served like the dashboard, with __CONTROL_TOKEN__ substituted.
+    """
+    name = ''
+    pages: dict = {}
+    post_limit = 30_000
+
+    def info(self):
+        return {}
+
+    def get(self, path, params, open_brain):
+        return None
+
+    def post(self, path, data, open_brain):
+        return None
+
+
+def make_server(vault, state, port=8765, extension=None, open_brain=None):
     token = secrets.token_urlsafe(32)
     page = (HERE / "dashboard.html").read_text().replace("__CONTROL_TOKEN__", token)
+    pages = {path: text.replace("__CONTROL_TOKEN__", token) for path, text in (extension.pages if extension else {}).items()}
+    status = {'connected': bool(extension), 'name': extension.name if extension else '',
+              **(extension.info() if extension else {})}
 
     def brain():
+        if open_brain:
+            return open_brain()
         return Brain(Path(vault).expanduser(), Path(state).expanduser())
 
     class Handler(BaseHTTPRequestHandler):
@@ -44,7 +65,7 @@ def make_server(vault, state, port=8765):
             if self.headers.get("Host") not in expected:
                 self.send(403, {"error": "Invalid host"})
                 return False
-            if urlsplit(self.path).path not in {'/', '/assets/app.js', '/assets/app.css'}:
+            if urlsplit(self.path).path not in {'/', '/assets/app.js', '/assets/app.css', *pages}:
                 if not hmac.compare_digest(self.headers.get("X-Control-Token", ""), token):
                     self.send(403, {"error": "Local control token required"})
                     return False
@@ -63,10 +84,12 @@ def make_server(vault, state, port=8765):
             if url.path in {'/assets/app.js', '/assets/app.css'}:
                 path = HERE/'static'/url.path.rsplit('/', 1)[1]
                 return self.send(200, path.read_text(), 'text/javascript' if path.suffix == '.js' else 'text/css')
-            if url.path in EMPTY:
-                return self.send(200, EMPTY[url.path])
+            if url.path in pages:
+                return self.send(200, pages[url.path], "text/html")
+            if url.path == '/api/extension':
+                return self.send(200, status)
             if not url.path.startswith('/api/brain/'):
-                return self.send(404, {'error': 'Not found'})
+                return self.extend('get', url.path, parse_qs(url.query))
             b = brain()
             try:
                 params = parse_qs(url.query)
@@ -86,17 +109,38 @@ def make_server(vault, state, port=8765):
             finally:
                 b.close()
 
+        def extend(self, method, path, payload):
+            if not extension:
+                return self.send(404, {'error': 'Not found'})
+            try:
+                result = getattr(extension, method)(path, payload, brain)
+            except (ValueError, KeyError, TypeError, OSError) as exc:
+                return self.send(400, {'error': redact(str(exc))})
+            if result is None:
+                return self.send(404, {'error': 'Not found'})
+            code, body = result if method == 'post' else (200, result)
+            return self.send(code, body)
+
+        def body(self, limit):
+            size = int(self.headers.get("Content-Length", "0"))
+            if not 0 < size <= limit:
+                raise ValueError("Request too large or empty")
+            return json.loads(self.rfile.read(size))
+
         def do_POST(self):
             if not self.check():
                 return
             if not self.path.startswith('/api/brain/'):
-                return self.send(404, {'error': 'Not found'})
+                if not extension:
+                    return self.send(404, {'error': 'Not found'})
+                try:
+                    data = self.body(extension.post_limit)
+                except (ValueError, TypeError) as exc:
+                    return self.send(400, {'error': redact(str(exc))})
+                return self.extend('post', urlsplit(self.path).path, data)
             b = brain()
             try:
-                size = int(self.headers.get("Content-Length", "0"))
-                if not 0 < size <= 2_100_000:
-                    raise ValueError("Request too large or empty")
-                data = json.loads(self.rfile.read(size))
+                data = self.body(2_100_000)
                 action = self.path.rsplit('/', 1)[1]
                 if action == 'sync':
                     result = b.sync()

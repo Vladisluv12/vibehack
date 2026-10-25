@@ -13,7 +13,7 @@ Runtime — только стандартная библиотека Python 3.11
 ## Быстрый старт
 
 ```bash
-make test
+make test          # Python; JS-тесты панели: pnpm install && node tests/test_particle_field.mjs
 make demo          # копирует examples/demo-vault в var/ и открывает панель
 ```
 
@@ -41,6 +41,22 @@ State (индекс, резервные копии) держите вне vault.
 `get_document`, `get_related`, `create_draft`. Удаления, правки существующих заметок
 и повышение статуса через него недоступны; черновики агента всегда `proposed`.
 
+## Плагины (Agent Control)
+
+GUI целиком входит в этот пакет. Блоки агентов (лента вызовов, метрики проекта,
+страница «Очередь агентов») заполняет необязательное расширение — подкласс
+`second_brain.web.Extension`, переданный в `make_server(..., extension=...)`.
+Без расширения панель пишет «Agent Control не подключён», а `/api/extension`
+возвращает `{"connected": false}`. Само хранилище об агентах ничего не знает.
+
+```python
+class MyAgents(Extension):
+    name = 'Agent Control'
+    pages = {'/queue': '<html>…</html>'}        # доп. страницы, __CONTROL_TOKEN__ подставится
+    def get(self, path, params, open_brain): ... # None → 404
+    def post(self, path, data, open_brain): ...  # (status, body) или None
+```
+
 ## Формат заметки
 
 ```markdown
@@ -65,11 +81,11 @@ source_hash: ""
 
 `second_brain/static/` — готовая сборка панели (three.js, 3d-force-graph; лицензии в
 `THIRD_PARTY_NOTICES.md`). Исходники в `frontend/`; пересборка требует сети:
-`npm install && npm run build`. Лента активности агентов и метрики проектов в
-этой версии скрыты, а их API отвечают пустыми снимками.
+`pnpm install && pnpm run build` (версии закреплены в `pnpm-lock.yaml`; сборка
+воспроизводится побайтно).
 
 ## Происхождение
 
 Модуль выделен из локального проекта agent-control (оркестратор агентов). Здесь
-остались только хранилище, индекс, панель и MCP-шлюз; очередь задач, воркеры и
-импорты истории агентов не входят.
+хранилище, индекс, вся панель и MCP-шлюз; очередь задач, воркеры и импорты
+истории агентов остаются в agent-control, который подключается как расширение.

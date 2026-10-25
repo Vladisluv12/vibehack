@@ -5,6 +5,7 @@ import { ParticleField } from './particle-field.js';
 
 const $ = id => document.getElementById(id);
 const token = document.querySelector('meta[name="control-token"]').content;
+let extension={connected:false};
 const colors = {project:'#ffc978',research:'#ae96ff',source:'#6dafff',session:'#64d9d2',decision:'#f5a5c6',concept:'#a5d89c',note:'#bdc9df'};
 const labels = {project:'Проект',research:'Исследование',source:'Источник',session:'Сессия',decision:'Решение',concept:'Понятие',note:'Заметка'};
 const reviews = {proposed:'Предложено · требует проверки',unreviewed:'Не проверено',reviewed:'Проверено'};
@@ -43,8 +44,15 @@ function renderActivity(){
   }
   if(!activityFeed.length)$('activity-feed').append(el('p','Новые вызовы появятся во время работы агентов.','hint'));
 }
+function applyExtension(){
+  const link=$('queue-link'),name=extension.name||'Agent Control';
+  if(extension.connected){$('activity-state').textContent='Подключение к '+name+'…';return}
+  link.removeAttribute('href');link.setAttribute('aria-disabled','true');link.title='Agent Control не подключён';
+  $('activity-state').textContent='Agent Control не подключён';$('connection').textContent='Локальная база подключена';
+  $('activity-feed').replaceChildren(el('p','Лента вызовов появится, когда панель запущена через Agent Control.','hint'));
+}
 async function status(){
-  if(activityBusy)return;activityBusy=true;
+  if(!extension.connected||activityBusy)return;activityBusy=true;
   try{
     const result=await api('activity'+(activityCursor===null?'':'?after='+activityCursor));
     if(result.initial){activityFeed=[];callTargets.clear()}
@@ -96,6 +104,7 @@ $('pause').onclick=()=>{if(reduced&&!motionOptIn){motionOptIn=true;flow?.setMoti
 document.addEventListener('visibilitychange',updateMotion);
 window.addEventListener('pagehide',event=>{if(event.persisted){flow?.setVisible(false);graph?.pauseAnimation()}else{flow?.dispose();graph?._destructor();}});
 window.addEventListener('pageshow',updateMotion);
+extension=await api('extension').catch(()=>({connected:false}));applyExtension();
 setRenderer('flow');await load();await status();const initial=new URLSearchParams(location.hash.slice(1)).get('note');if(initial)openNote(initial);setInterval(()=>{if(!document.hidden)status()},1800);
 
 $('project-focus').onchange=()=>{const id=$('project-focus').value;if(id)openNote(id);else if(rendererMode==='flow')flow?.fit();else graph?.zoomToFit(0,70)};
@@ -104,6 +113,7 @@ $('map-expand').onclick=()=>{const expanded=document.querySelector('.workspace')
 
 async function showProjectMetrics(note,selection){
   $('project-checkpoint').hidden=note.kind!=='project';if(note.kind!=='project')return;
+  if(!extension.connected){$('project-values').replaceChildren(el('p','Метрики проекта появятся при подключении Agent Control.','hint'));return}
   $('project-values').replaceChildren(el('p','Читаю локальный checkpoint…','hint'));
   try{
     if(!checkpoints||Date.now()-checkpointAt>60000){
