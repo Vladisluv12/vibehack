@@ -184,6 +184,50 @@ NOTES = [
      'Открытый код снимает вопрос доверия к локальному инструменту.'),
 ]
 
+# Agent layer: many short task logs and drafts, tag-heavy and densely cross-linked,
+# so the agent space is larger and noisier than the human one.
+AGENT_TOPICS = {
+    'core': ('core', ['пересборка индекса', 'дубли ID', 'миграция Versions', 'бэкап vault', 'переводы строк', 'блокировки файлов']),
+    'agents': ('agents', ['ретраи воркеров', 'лента вызовов', 'лимиты MCP', 'приоритеты очереди', 'цитаты в черновиках', 'разбор черновиков']),
+    'search': ('search', ['веса заголовков', 'сниппеты', 'стемминг', 'триграммы', 'гибридная выдача', 'замер качества поиска']),
+    'security': ('security', ['аудит путей', 'проверка Origin', 'вырезание токенов', 'обновление зависимостей', 'фильтр инструкций', 'заголовки CSP']),
+    'onboarding': ('onboarding', ['офлайн-демо', 'шаблоны заметок', 'импорт из Notion', 'сценарий первого запуска', 'справка CLI', 'частые вопросы']),
+    'gtm': ('gtm', ['таблица конкурентов', 'слайды питча', 'сбор метрик пилота', 'текст лендинга', 'тарифы', 'репетиция демо']),
+}
+AGENTS = ['agent:claude-code', 'agent:codex', 'agent:second-brain-mcp']
+TAGS = {}
+
+
+def agent_notes():
+    out, projects = [], list(AGENT_TOPICS)
+    for p, (project, topics) in enumerate(AGENT_TOPICS.values()):
+        for t, topic in enumerate(topics):
+            n = p * len(topics) + t
+            log, draft = f'a_log_{project}_{t}', f'a_draft_{project}_{t}'
+            next_log = f'a_log_{project}_{(t + 1) % len(topics)}'
+            other = f'a_draft_{projects[(p + 1) % len(projects)]}_{t}'
+            tags = ['agent', project, topic.split()[0], ['auto', 'todo', 'review-needed'][n % 3]]
+            TAGS[log] = TAGS[draft] = tags
+            hashtags = ' '.join('#' + tag.replace(' ', '-') for tag in tags)
+            agent = AGENTS[n % len(AGENTS)]
+            out.append((log, 'session', 'unreviewed', f'Лог: {topic}', agent,
+                        [('relates_to', project), ('relates_to', next_log), ('relates_to', f'a_log_{project}_{(t + 3) % len(topics)}')],
+                        f'Агент выполнил задачу «{topic}»: прочитал связанные заметки, внёс правки и оставил черновик на проверку.\n\n{hashtags}'))
+            out.append((draft, 'note', 'proposed', f'Черновик: {topic}', agent,
+                        [('derived_from', log), ('relates_to', project), ('relates_to', f'a_draft_{project}_{(t + 2) % len(topics)}')]
+                        + ([('relates_to', other)] if t % 2 == 0 else []),
+                        f'Предложение агента по теме «{topic}». Требует проверки человеком перед тем, как стать частью памяти.\n\n{hashtags}'))
+    return out
+
+
+NOTES += agent_notes()
+# Humans tag sparingly: one project tag on notes that belong to a project.
+PROJECT_TAGS = {'core': 'ядро', 'agents': 'агенты', 'search': 'поиск', 'security': 'безопасность', 'onboarding': 'онбординг', 'gtm': 'gtm'}
+for _key, _kind, _review, _title, _source, _relations, _body in NOTES:
+    for _rel, _target in _relations:
+        if _rel == 'belongs_to' and _key not in TAGS:
+            TAGS[_key] = [PROJECT_TAGS[_target]]
+
 
 def ident(key):
     return hashlib.sha256(('showcase:' + key).encode()).hexdigest()[:32]
@@ -202,7 +246,7 @@ def main():
             assert target in keys, (key, target)
         meta = {'id': ident(key), 'title': title, 'type': kind, 'permalink': f'{kind}/{ident(key)}', 'review': review,
                 'created': (start + timedelta(hours=37 * i)).strftime('%Y-%m-%dT%H:%M:%SZ'),
-                'source': source, 'source_hash': ''}
+                'source': source, 'source_hash': '', **({'tags': TAGS[key]} if key in TAGS else {})}
         text = '---\n' + ''.join(f'{k}: {json.dumps(v, ensure_ascii=False)}\n' for k, v in meta.items()) + '---\n\n' + body + '\n'
         if relations:
             text += '\n## Relations\n' + ''.join(f'- {rel} [[{ident(target)}]]\n' for rel, target in relations)

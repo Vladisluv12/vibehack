@@ -6,11 +6,16 @@
 <div class="vignette" aria-hidden="true"></div>
 
 <header class="hud-top">
-  <div class="hud-left"><button id="drawer-toggle" class="pill drawer-toggle" aria-expanded="false" aria-controls="drawer" title="Каталог заметок" aria-label="Ваши знания"><span aria-hidden="true">☰</span><span class="label">Ваши знания</span></button>
-  <a class="brand" href="/" aria-label="Second Brain, главная"><span class="mark" aria-hidden="true">◇</span><span>Second Brain<small>Память команды и AI-агентов</small></span></a></div>
+  <div class="hud-left">
+    <a class="brand" href="/" aria-label="Second Brain, главная"><span class="mark" aria-hidden="true">◇</span><span>Second Brain<small>Память команды и AI-агентов</small></span></a>
+    <div class="hud-left-row">
+      <button id="drawer-toggle" class="pill drawer-toggle" aria-expanded="false" aria-controls="drawer" title="Каталог заметок" aria-label="Ваши знания"><span aria-hidden="true">☰</span><span class="label">Ваши знания</span></button>
+      <div class="segmented spaces" role="group" aria-label="Пространство"><button id="space-human" class="active" aria-pressed="true" title="Заметки, написанные людьми">Люди <small id="count-human"></small></button><button id="space-agent" aria-pressed="false" title="Логи и черновики агентов">Агенты <small id="count-agent"></small></button><button id="space-all" aria-pressed="false" title="Оба пространства вместе">Всё</button></div>
+    </div>
+  </div>
   <div class="command" id="command">
     <span class="command-icon" aria-hidden="true">⌕</span>
-    <input type="search" id="search" placeholder="Поиск по заметкам…" aria-label="Поиск по заметкам" autocomplete="off" role="combobox" aria-expanded="false" aria-controls="results">
+    <input type="search" id="search" placeholder="Поиск по заметкам или #тегу…" aria-label="Поиск по заметкам" autocomplete="off" role="combobox" aria-expanded="false" aria-controls="results">
     <kbd>Ctrl K</kbd>
     <div id="results" class="results" role="listbox" hidden></div>
   </div>
@@ -21,6 +26,7 @@
     <button id="new-note" class="pill primary">＋ Заметка</button>
     <button id="sync" class="pill icon" title="Обновить из файлов" aria-label="Обновить из файлов">⟳</button>
     <button id="backup" class="pill icon" title="Резервная копия" aria-label="Резервная копия">⤓</button>
+    <button id="settings" class="pill icon" title="Настройки: эмбеддинги и семантические связи" aria-label="Настройки">⚙</button>
   </div>
 </header>
 
@@ -33,9 +39,11 @@
 </section>
 
 <aside id="drawer" class="drawer" aria-label="Ваши знания" hidden>
-  <div class="drawer-head"><h2>Ваши знания <span id="catalog-count"></span></h2><button id="drawer-close" class="ghost" aria-label="Закрыть каталог">✕</button></div>
+  <div class="drawer-head"><h2>Ваши знания <span id="catalog-count"></span></h2><div class="drawer-head-actions"><button id="drawer-new" class="pill primary small">＋ Заметка</button><button id="drawer-close" class="ghost" aria-label="Закрыть каталог">✕</button></div></div>
   <p id="catalog-query" class="catalog-query" hidden></p>
   <div id="kind-filter" class="chips" role="group" aria-label="Тип заметок"></div>
+  <div id="review-filter" class="chips review-chips" role="group" aria-label="Статус проверки"></div>
+  <div id="tag-filter" class="chips tag-chips" role="group" aria-label="Популярные теги"></div>
   <div id="catalog" class="catalog"></div>
   <button id="more" class="pill more" hidden>Показать ещё</button>
   <div class="drawer-foot"><button id="github-drawer" class="pill">Подключить GitHub</button><span>Хранится локально</span></div>
@@ -44,7 +52,8 @@
 <aside id="inspector" class="inspector" aria-label="Выбранная заметка" hidden>
   <div class="note-top"><span id="note-kind" class="kind-label"></span><button id="close-note" class="ghost" aria-label="Закрыть заметку">✕</button></div>
   <h2 id="note-title"></h2>
-  <div class="note-badges"><span id="review" class="review"></span><span id="note-cluster" class="cluster-badge"></span></div>
+  <div class="note-badges"><span id="note-space" class="space-badge"></span><span id="review" class="review"></span><span id="note-cluster" class="cluster-badge"></span></div>
+  <div id="note-tags" class="tag-chips"></div>
   <dl id="metadata"></dl>
   <section id="project-checkpoint" hidden aria-label="Показатели проекта"><h3>Состояние проекта</h3><div id="project-values" class="project-values"></div></section>
   <div class="note-actions"><button id="focus-local" class="pill">◎ Окружение</button><button id="edit" class="pill">Редактировать</button><a id="obsidian" class="pill" href="#">Obsidian ↗</a></div>
@@ -52,6 +61,7 @@
   <div id="editing" hidden><label for="editor">Markdown</label><textarea id="editor" spellcheck="false"></textarea><div class="edit-actions"><button id="save" class="pill primary">Сохранить</button><button id="cancel-edit" class="pill">Отмена</button></div></div>
   <h3>Связи <span id="relations-count"></span></h3>
   <div id="relations"></div>
+  <section id="similar-section" hidden><h3>Похоже по смыслу <span id="similar-count"></span></h3><div id="similar"></div></section>
 </aside>
 
 <footer class="hud-bottom">
@@ -60,6 +70,7 @@
     <div class="segmented" role="group" aria-label="Цвет узлов"><button id="color-cluster" class="active" aria-pressed="true">Кластеры</button><button id="color-kind" aria-pressed="false">Типы</button></div>
     <div class="segmented" role="group" aria-label="Область"><button id="scope-all" class="active" aria-pressed="true">Весь граф</button><button id="scope-local" aria-pressed="false" disabled title="Сначала выберите заметку">Окружение</button></div>
     <div id="depth-group" class="segmented" role="group" aria-label="Глубина окружения" hidden><button id="depth-1" class="active" aria-pressed="true">1</button><button id="depth-2" aria-pressed="false">2</button></div>
+    <button id="semantic-toggle" class="pill" aria-pressed="true" title="Показать предложенные смысловые связи пунктиром">≈ Смысловые</button>
     <button id="fit" class="pill" title="Вписать граф">Вписать</button>
     <button id="tour" class="pill primary" aria-pressed="false" title="Автоматический обзор ключевых узлов">▶ Демо-тур</button>
   </div>
@@ -69,7 +80,25 @@
 <section id="activity-panel" class="activity-panel" aria-label="События агентов" hidden><div class="activity-heading"><span>Вызовы агентов</span><small id="activity-state">Подключение…</small></div><div id="activity-feed" aria-live="off"></div></section>
 <div id="notice" role="status" aria-live="polite"></div>
 
-<dialog id="create-dialog"><form id="create-form"><div class="dialog-head"><h2>Новая заметка</h2><button type="button" id="close-dialog" class="ghost" aria-label="Закрыть">✕</button></div><label for="create-title">Название</label><input id="create-title" name="title" required maxlength="200"><label for="create-kind">Тип</label><select id="create-kind" name="kind"><option value="note">Заметка</option><option value="research">Исследование</option><option value="decision">Решение</option><option value="concept">Понятие</option><option value="project">Проект</option></select><label for="create-body">Содержание · Markdown</label><textarea id="create-body" name="body" required maxlength="500000"></textarea><p class="hint">Новая запись появится со статусом «Предложено». Для связи используйте [[название заметки]].</p><button type="submit" class="pill primary">Создать заметку</button></form></dialog>
+<dialog id="create-dialog"><form id="create-form"><div class="dialog-head"><h2>Новая заметка</h2><button type="button" id="close-dialog" class="ghost" aria-label="Закрыть">✕</button></div><label for="create-title">Название</label><input id="create-title" name="title" required maxlength="200"><label for="create-kind">Тип</label><select id="create-kind" name="kind"><option value="note">Заметка</option><option value="research">Исследование</option><option value="decision">Решение</option><option value="concept">Понятие</option><option value="project">Проект</option></select><label for="create-tags">Теги</label><input id="create-tags" name="tags" placeholder="через запятую: поиск, project/alpha" autocomplete="off"><label for="create-body">Содержание · Markdown</label><textarea id="create-body" name="body" required maxlength="500000"></textarea><p class="hint">Новая запись появится со статусом «Предложено». Для связи используйте [[название заметки]], тег можно поставить и прямо в тексте: #идея.</p><button type="submit" class="pill primary">Создать заметку</button></form></dialog>
 <dialog id="github-dialog"><form id="github-form"><div class="dialog-head"><h2>GitHub-репозиторий</h2><button type="button" id="close-github" class="ghost" aria-label="Закрыть">✕</button></div><label for="github-url">Ссылка на репозиторий</label><input id="github-url" name="url" required placeholder="https://github.com/owner/repo" autocomplete="off" spellcheck="false"><p class="hint">Markdown-файлы репозитория (README, docs и другие) появятся как источники со статусом «Не проверено» и соберутся в кластер вокруг проекта репозитория. Нужна сеть; код и бинарные файлы не скачиваются на диск. Для приватных репозиториев запустите сервер с переменной окружения GITHUB_TOKEN.</p><p id="github-status" class="github-status" role="status"></p><button type="submit" class="pill primary">Импортировать</button></form></dialog>
+<dialog id="settings-dialog" class="wide"><form id="settings-form"><div class="dialog-head"><h2>Настройки</h2><button type="button" id="close-settings" class="ghost" aria-label="Закрыть">✕</button></div>
+<h3>Эмбеддинги</h3>
+<p class="hint">Заметки режутся на фрагменты, вектор каждого фрагмента запрашивается у выбранного эндпоинта и хранится локально в индексе. Повторно запрашиваются только изменившиеся фрагменты.</p>
+<label for="set-provider">Источник векторов</label>
+<p class="hint">Для русского и английского хорошо работают <b>bge-m3</b> и <b>USER-bge-m3</b> (без префикса). Для multilingual-e5 укажите префикс «query: ».</p>
+<select id="set-provider" name="provider"><option value="local">Встроенный — без сети и без модели (лексическое сходство)</option><option value="openai">OpenAI-совместимый: OpenAI, LM Studio, vLLM, LiteLLM, llama.cpp</option><option value="ollama">Ollama</option><option value="tei">HuggingFace Text Embeddings Inference</option></select>
+<div id="endpoint-fields">
+<label for="set-url">URL эндпоинта</label><input id="set-url" name="url" autocomplete="off" spellcheck="false">
+<div class="field-row"><div><label for="set-model">Модель</label><input id="set-model" name="model" autocomplete="off" spellcheck="false"></div><div><label for="set-prefix">Префикс фрагмента</label><input id="set-prefix" name="document_prefix" autocomplete="off" spellcheck="false" placeholder="например, passage: "></div></div>
+<label for="set-key">API-ключ</label><input id="set-key" name="api_key" type="password" autocomplete="new-password" spellcheck="false">
+</div>
+<h3>Семантические связи</h3>
+<div class="field-row"><fieldset><legend>Искать между заметками</legend><label class="check"><input type="checkbox" name="space" value="human"> людей</label><label class="check"><input type="checkbox" name="space" value="agent"> агентов</label></fieldset>
+<div><label class="check"><input type="checkbox" id="set-auto"> Порог автоматически (98-й перцентиль по базе)</label><label for="set-threshold">Порог сходства <output id="threshold-value"></output></label><input id="set-threshold" name="threshold" type="range" min="0.05" max="0.95" step="0.01">
+<label for="set-topk">Предложений на заметку</label><input id="set-topk" name="top_k" type="number" min="1" max="20"></div></div>
+<p id="settings-status" class="github-status" role="status"></p>
+<div class="dialog-actions"><button type="button" id="settings-test" class="pill">Проверить подключение</button><button type="submit" class="pill primary">Сохранить</button></div>
+</form></dialog>
 <script type="module" src="/assets/app.js"></script>
 </body></html>

@@ -106,6 +106,42 @@ class BrainTests(unittest.TestCase):
         for p in self.brain.vault.rglob('*.md'):
             self.assertEqual(p.read_bytes(),(self.root/'restored'/p.relative_to(self.brain.vault)).read_bytes())
 
+    def test_spaces_split_human_and_agent_notes(self):
+        human = self.brain.create('Решение команды', 'Подробное обоснование')
+        draft = self.brain.create('Черновик агента', 'Кратко', source='agent:codex', links=[human])
+        tagged = self.brain.create('Явно агент', 'x', extra={'space': 'agent'})
+        self.brain.sync()
+        self.assertEqual(self.brain.graph()['spaces'], {'agent': 2, 'human': 1})
+        self.assertEqual({n['id'] for n in self.brain.list(space='agent')['items']}, {draft, tagged})
+        self.assertEqual([n['space'] for n in self.brain.list('Решение')['items']], ['human'])
+        self.assertEqual(self.brain.get(draft)['space'], 'agent')
+        self.assertEqual(self.brain.graph(space='human')['links'], [])
+        self.assertEqual(len(self.brain.graph()['links']), 1)
+        self.assertEqual({n['id'] for n in self.brain.list(review='proposed', space='agent')['items']}, {draft, tagged})
+        self.assertEqual(self.brain.list('Черновик', review='reviewed')['total'], 0)
+        with self.assertRaises(ValueError):
+            self.brain.list(space='robots')
+        with self.assertRaises(ValueError):
+            self.brain.list(review='maybe')
+
+    def test_tags_from_frontmatter_yaml_lists_and_inline(self):
+        flow = self.brain.create('Поток', 'Текст #Идея и `#код`', extra={'tags': ['поиск', 'BM25']})
+        (self.brain.vault / 'obsidian.md').write_text(
+            '---\ntitle: "Obsidian"\ntags:\n  - поиск\n  - project/alpha\n---\nСм. [x](#anchor), #123 и #идея\n```\n#fence\n```\n',
+            encoding='utf-8')
+        source = self.root / 'ext.md'
+        source.write_text('# Внешний\n#чужой-тег', encoding='utf-8')
+        imported = self.brain.import_markdown(source)['id']
+        self.brain.sync()
+        self.assertEqual(self.brain.get(flow)['tags'], ['bm25', 'идея', 'поиск'])
+        self.assertEqual(self.brain.get(imported)['tags'], [])
+        self.assertEqual(self.brain.list(tag='#Поиск')['total'], 2)
+        self.assertEqual({n['title'] for n in self.brain.list(tag='project/alpha')['items']}, {'Obsidian'})
+        self.assertEqual(self.brain.tags()['tags'][:2], [{'tag': 'идея', 'count': 2}, {'tag': 'поиск', 'count': 2}])
+        self.assertNotIn('fence', {t['tag'] for t in self.brain.tags()['tags']})
+        with self.assertRaises(ValueError):
+            self.brain.list(tag='bad tag')
+
     def test_bm25_title_ranking(self):
         best=self.brain.create('Qdrant retrieval','Exact match')
         self.brain.create('AAA other','many unrelated words '*150+' Qdrant retrieval')

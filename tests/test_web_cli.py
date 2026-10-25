@@ -44,6 +44,45 @@ class WebCliTests(unittest.TestCase):
         self.assertGreater(report['links'], report['notes'])
         self.assertEqual(report['warning_count'], 0)
 
+    def test_settings_and_semantic_endpoints(self):
+        self.cli('demo', '--showcase')
+        server = make_server(self.vault, self.state, 0)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        try:
+            base = f'http://127.0.0.1:{server.server_port}'
+            token = re.search(r'name="control-token" content="([^"]+)"', urllib.request.urlopen(base+'/').read().decode())[1]
+
+            def call(path, body=None):
+                request = urllib.request.Request(base+path, data=json.dumps(body).encode() if body is not None else None,
+                                                 headers={'X-Control-Token': token})
+                return json.loads(urllib.request.urlopen(request).read())
+
+            with self.assertRaises(urllib.error.HTTPError) as denied:
+                urllib.request.urlopen(base+'/api/settings')
+            self.assertEqual(denied.exception.code, 403)
+            denied.exception.close()
+            self.assertEqual(call('/api/settings')['embeddings']['provider'], 'local')
+            saved = call('/api/settings', {'embeddings': {'api_key': 'sk-do-not-leak-123'}})
+            self.assertTrue(saved['embeddings']['api_key_set'])
+            self.assertNotIn('sk-do-not-leak-123', json.dumps(call('/api/settings')))
+            self.assertEqual(call('/api/settings/test', {})['provider'], 'local')
+            semantic = call('/api/brain/semantic')
+            self.assertGreater(len(semantic['links']), 5)
+            first = semantic['links'][0]
+            call('/api/brain/link', {'source': first['source'], 'target': first['target']})
+            second = semantic['links'][1]
+            call('/api/brain/dismiss', {'source': second['source'], 'target': second['target']})
+            remaining = {frozenset((l['source'], l['target'])) for l in call('/api/brain/semantic')['links']}
+            self.assertNotIn(frozenset((first['source'], first['target'])), remaining)
+            self.assertNotIn(frozenset((second['source'], second['target'])), remaining)
+            with self.assertRaises(urllib.error.HTTPError) as bad:
+                call('/api/settings', {'embeddings': {'provider': 'openai', 'url': 'ftp://x', 'model': 'm'}})
+            self.assertEqual(bad.exception.code, 400)
+            bad.exception.close()
+        finally:
+            server.shutdown()
+            server.server_close()
+
     def test_server_requires_token_and_serves_brain_only(self):
         self.cli('demo')
         server = make_server(self.vault, self.state, 0)
