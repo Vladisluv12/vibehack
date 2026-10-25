@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
@@ -20,7 +21,7 @@ class BrainTests(unittest.TestCase):
     def test_provenance_dedup_graph_search_external_edit(self):
         project = self.brain.create('Проект Steam', 'Трекер цен', kind='project', key='project')
         source = self.root/'research.md'
-        source.write_text('# Документ\n## Кэш\nКэширование результатов\n')
+        source.write_text('# Документ\n## Кэш\nКэширование результатов\n', encoding='utf-8')
         result = self.brain.import_markdown(source, split=True, links=[project])
         self.assertEqual(result, self.brain.import_markdown(source, split=True, links=[project]))
         self.assertEqual(self.brain.sync()['notes'], 3)
@@ -29,21 +30,27 @@ class BrainTests(unittest.TestCase):
         note = self.brain.get(result['id'])
         self.assertEqual(note['meta']['source_hash'], digest(source.read_bytes()))
         self.assertEqual(note['review'], 'unreviewed')
-        p = self.brain.vault/note['path'];p.write_text(p.read_text()+'\nНовая мысль')
+        p = self.brain.vault/note['path'];p.write_text(p.read_text(encoding='utf-8')+'\nНовая мысль', encoding='utf-8')
         self.brain.sync()
         self.assertEqual(self.brain.list('мысль')['total'], 1)
 
     def test_edit_conflict_secrets_and_path_safety(self):
         ident = self.brain.create('Заметка', 'original');self.brain.sync()
         note = self.brain.get(ident)
-        (self.brain.vault/note['path']).write_text(note['content']+'external')
+        (self.brain.vault/note['path']).write_text(note['content']+'external', encoding='utf-8')
         with self.assertRaisesRegex(ValueError, 'Conflict'):
             self.brain.edit(ident, note['content']+'edit', note['hash'])
         with self.assertRaises(ValueError):
             self.brain.edit(ident, note['content']+' API_KEY=sk-abcdefghijkl', note['hash'])
         for path in ('../outside.md', '/tmp/outside.md', '.hidden/n.md'):
             with self.assertRaises(ValueError):self.brain.safe(path)
-        (self.brain.vault/'escape').symlink_to(self.root, target_is_directory=True)
+        for path in ('C:/outside.md', 'C:outside.md', r'\\server\share\outside.md'):
+            if os.name == 'nt':
+                with self.assertRaises(ValueError):self.brain.safe(path)
+        try:
+            (self.brain.vault/'escape').symlink_to(self.root, target_is_directory=True)
+        except OSError:  # Windows without Developer Mode cannot create symlinks
+            return
         with self.assertRaises(ValueError):self.brain.safe('escape/outside.md')
 
     def test_backup_roundtrip_and_traversal(self):
@@ -67,20 +74,20 @@ class BrainTests(unittest.TestCase):
         self.assertEqual(self.brain.list(limit=2)['next'],2)
         self.assertEqual(len(self.brain.list(offset=2,limit=2)['items']),2)
         p=next(self.brain.vault.rglob('*.md'))
-        (self.brain.vault/'duplicate.md').write_text(p.read_text())
+        (self.brain.vault/'duplicate.md').write_text(p.read_text(encoding='utf-8'), encoding='utf-8')
         with self.assertRaisesRegex(ValueError,'Duplicate'):self.brain.sync()
 
     def test_rename_reimport_preserves_id_and_user_edits(self):
         ident=self.brain.create('Stable','before',key='stable');self.brain.sync()
         old=self.brain.vault/self.brain.get(ident)['path']
         moved=self.brain.vault/'Renamed.md';old.rename(moved)
-        moved.write_text(moved.read_text()+'\nUser edit')
+        moved.write_text(moved.read_text(encoding='utf-8')+'\nUser edit', encoding='utf-8')
         self.assertEqual(self.brain.create('Stable','before',key='stable'),ident)
         self.assertEqual(self.brain.sync()['notes'],1)
         self.assertIn('User edit',self.brain.get(ident)['body'])
 
     def test_invalid_scalar_metadata_and_nested_fences(self):
-        (self.brain.vault/'external.md').write_text('---\ntype: []\nreview: {}\n---\nBody')
+        (self.brain.vault/'external.md').write_text('---\ntype: []\nreview: {}\n---\nBody', encoding='utf-8')
         victim=self.brain.create('Victim','real')
         self.brain.create('Transcript','Example\n```\n[[Victim]]',kind='session',key='fence')
         self.assertEqual(self.brain.sync()['notes'],3)

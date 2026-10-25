@@ -8,9 +8,11 @@ from pathlib import Path
 from urllib.parse import urlsplit, parse_qs
 
 from .brain import Brain
+from .github import import_github
 from .redact import redact
 
 HERE = Path(__file__).parent
+ICON = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><path d="M8 1.5 14.5 8 8 14.5 1.5 8z" fill="none" stroke="#3567d6" stroke-width="2"/></svg>'
 
 
 class Extension:
@@ -35,7 +37,7 @@ class Extension:
 
 def make_server(vault, state, port=8765, extension=None, open_brain=None):
     token = secrets.token_urlsafe(32)
-    page = (HERE / "dashboard.html").read_text().replace("__CONTROL_TOKEN__", token)
+    page = (HERE / "dashboard.html").read_text(encoding="utf-8").replace("__CONTROL_TOKEN__", token)
     pages = {path: text.replace("__CONTROL_TOKEN__", token) for path, text in (extension.pages if extension else {}).items()}
     status = {'connected': bool(extension), 'name': extension.name if extension else '',
               **(extension.info() if extension else {})}
@@ -65,7 +67,7 @@ def make_server(vault, state, port=8765, extension=None, open_brain=None):
             if self.headers.get("Host") not in expected:
                 self.send(403, {"error": "Invalid host"})
                 return False
-            if urlsplit(self.path).path not in {'/', '/assets/app.js', '/assets/app.css', *pages}:
+            if urlsplit(self.path).path not in {'/', '/assets/app.js', '/assets/app.css', '/assets/icon.svg', *pages}:
                 if not hmac.compare_digest(self.headers.get("X-Control-Token", ""), token):
                     self.send(403, {"error": "Local control token required"})
                     return False
@@ -81,9 +83,11 @@ def make_server(vault, state, port=8765, extension=None, open_brain=None):
             url = urlsplit(self.path)
             if url.path == "/":
                 return self.send(200, page, "text/html")
+            if url.path == '/assets/icon.svg':
+                return self.send(200, ICON, 'image/svg+xml')
             if url.path in {'/assets/app.js', '/assets/app.css'}:
                 path = HERE/'static'/url.path.rsplit('/', 1)[1]
-                return self.send(200, path.read_text(), 'text/javascript' if path.suffix == '.js' else 'text/css')
+                return self.send(200, path.read_text(encoding="utf-8"), 'text/javascript' if path.suffix == '.js' else 'text/css')
             if url.path in pages:
                 return self.send(200, pages[url.path], "text/html")
             if url.path == '/api/extension':
@@ -148,6 +152,9 @@ def make_server(vault, state, port=8765, extension=None, open_brain=None):
                     result = b.backup()
                 elif action == 'edit':
                     result = b.edit(data['id'], data['content'], data['hash'])
+                elif action == 'import-github':
+                    result = import_github(b, data['url'])
+                    b.sync()
                 elif action == 'create':
                     ident = b.create(data['title'], data['body'], kind=data.get('kind', 'note'), review='proposed')
                     b.sync()

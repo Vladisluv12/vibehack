@@ -6,18 +6,24 @@ Only explicit document imports read outside the vault (CLI, never HTTP).
 from __future__ import annotations
 
 from contextlib import contextmanager
-import fcntl
 import hashlib
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
 import sqlite3
 import stat
 import tempfile
 import time
+from urllib.parse import quote
 import uuid
 import zipfile
+
+try:
+    import fcntl
+except ImportError:  # Windows
+    fcntl = None
+    import msvcrt
 
 from .redact import redact
 
@@ -49,16 +55,38 @@ def declared_links(value):
     return list(value)
 
 
+def unsafe_relative(rel):
+    """Absolute, drive-relative (Windows `/x`, `C:x`), parent or hidden paths."""
+    return rel.is_absolute() or bool(rel.anchor) or ".." in rel.parts or any(p.startswith(".") for p in rel.parts)
+
+
+def path_uri(value):
+    """file:// URI matching import sources; POSIX metadata also resolves on Windows."""
+    if Path(value).is_absolute():
+        return Path(value).as_uri()
+    if PurePosixPath(value).is_absolute():
+        return 'file://' + quote(value)
+    return value
+
+
 def atomic_write(path, text):
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    # mkstemp creates the file 0600. Byte-exact: no newline translation on Windows.
     fd, name = tempfile.mkstemp(prefix=".writing-", dir=path.parent)
     try:
-        with os.fdopen(fd, "w") as stream:
-            os.fchmod(stream.fileno(), 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as stream:
             stream.write(text)
             stream.flush()
             os.fsync(stream.fileno())
-        os.replace(name, path)
+        for attempt in range(20):
+            try:
+                os.replace(name, path)
+                break
+            except PermissionError:
+                # Windows refuses to replace a file another reader holds open.
+                if os.name != "nt" or attempt == 19:
+                    raise
+                time.sleep(0.05)
     finally:
         if os.path.exists(name):
             os.unlink(name)
@@ -135,12 +163,26 @@ class Brain:
     @contextmanager
     def lock(self):
         with (self.vault / LOCK_NAME).open("a+") as stream:
-            fcntl.flock(stream, fcntl.LOCK_EX)
-            yield
+            if fcntl:
+                fcntl.flock(stream, fcntl.LOCK_EX)
+                yield
+                return
+            stream.seek(0)
+            while True:
+                try:
+                    msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
+                    break
+                except OSError:
+                    time.sleep(0.02)
+            try:
+                yield
+            finally:
+                stream.seek(0)
+                msvcrt.locking(stream.fileno(), msvcrt.LK_UNLCK, 1)
 
     def safe(self, relative):
         rel = Path(relative)
-        if rel.is_absolute() or ".." in rel.parts or any(p.startswith(".") for p in rel.parts):
+        if unsafe_relative(rel):
             raise ValueError("Invalid vault path")
         path = self.vault / rel
         for part in [path, *path.parents]:
@@ -316,7 +358,7 @@ class Brain:
                     if Path(relative).parts[0] == 'Versions':
                         continue
                     try:
-                        with self.safe(relative).open('r') as stream:
+                        with self.safe(relative).open('r', encoding='utf-8', newline='') as stream:
                             head = stream.read(32768)
                         if parse_note(head,relative)[0]['id'] == ident:
                             return ident
@@ -375,8 +417,7 @@ class Brain:
         for row in rows:
             if row['id'] in owners or not isinstance(row['project'], str):
                 continue
-            uri = Path(row['project']).absolute().as_uri() if row['project'].startswith('/') else row['project']
-            matches = by_source.get(uri, [])
+            matches = by_source.get(path_uri(row['project']), [])
             if len(matches) == 1:
                 owners[row['id']] = matches[0]
         direct = {}
@@ -449,7 +490,7 @@ def restore_backup(archive_path, destination):
         data = {}
         for name, expected in manifest.items():
             path = Path(name)
-            if path.is_absolute() or '..' in path.parts or path.suffix != '.md' or any(p.startswith('.') for p in path.parts):
+            if unsafe_relative(path) or path.suffix != '.md':
                 raise ValueError('Unsafe backup path')
             raw = archive.read(name)
             if len(raw)>MAX_NOTE or digest(raw)!=expected:

@@ -6,11 +6,13 @@ import re
 import tempfile
 import threading
 import unittest
+from unittest import mock
 import urllib.error
 import urllib.request
 
 from second_brain.cli import main
 from second_brain.web import Extension, make_server
+from test_github import fake_fetch
 
 
 class WebCliTests(unittest.TestCase):
@@ -35,6 +37,12 @@ class WebCliTests(unittest.TestCase):
         self.assertGreater(report['links'], 5)
         self.assertEqual(self.cli('search', 'proposed')['total'], 2)
         self.assertEqual(self.cli('demo')['notes'], 8)
+
+    def test_showcase_vault_is_dense_and_clean(self):
+        report = self.cli('demo', '--showcase')
+        self.assertGreaterEqual(report['notes'], 60)
+        self.assertGreater(report['links'], report['notes'])
+        self.assertEqual(report['warning_count'], 0)
 
     def test_server_requires_token_and_serves_brain_only(self):
         self.cli('demo')
@@ -65,6 +73,14 @@ class WebCliTests(unittest.TestCase):
             self.assertEqual(absent.exception.code, 404)
             created = call('/api/brain/create', {'title': 'Новая', 'body': 'текст', 'review': 'reviewed'})
             self.assertEqual(call('/api/brain/note?id='+created['id'])['review'], 'proposed')
+            with mock.patch('second_brain.github.fetch', fake_fetch):
+                imported = call('/api/brain/import-github', {'url': 'https://github.com/acme/tools'})
+            self.assertEqual(imported['imported'], 2)
+            self.assertEqual(call('/api/brain/note?id='+imported['project'])['title'], 'acme/tools')
+            with self.assertRaises(urllib.error.HTTPError) as bad_repo:
+                call('/api/brain/import-github', {'url': 'https://evil.test/acme/tools'})
+            self.assertEqual(bad_repo.exception.code, 400)
+            bad_repo.exception.close()
             with self.assertRaises(urllib.error.HTTPError) as missing:
                 call('/api/tasks', {})
             self.assertEqual(missing.exception.code, 404)

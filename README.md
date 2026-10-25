@@ -8,13 +8,16 @@ Obsidian), поиск и граф — пересоздаваемый индек�
 - `proposed` — предложено человеком или агентом;
 - `reviewed` — проверено человеком. Агент не может выставить этот статус.
 
-Runtime — только стандартная библиотека Python 3.11+. Сеть не нужна.
+Runtime — только стандартная библиотека Python 3.11+. Сеть не нужна (кроме явного импорта
+с GitHub). Работает на
+Linux, macOS и Windows (на Windows вместо `python3` — `python` или `py`).
 
 ## Быстрый старт
 
 ```bash
-make test          # Python; JS-тесты панели: pnpm install && node tests/test_particle_field.mjs
-make demo          # копирует examples/demo-vault в var/ и открывает панель
+make test          # Python; JS-тесты фронтенда: node --test tests/*.mjs
+make demo          # копирует examples/demo-vault (8 заметок) в var/ и открывает панель
+make showcase      # то же для examples/showcase-vault: 80 связанных заметок для презентаций
 ```
 
 Панель: http://127.0.0.1:8765/ (слушает только localhost, API защищён токеном страницы).
@@ -26,6 +29,7 @@ python3 -m second_brain --vault PATH --state PATH sync
 python3 -m second_brain --vault PATH search 'запрос'
 python3 -m second_brain --vault PATH read <id>
 python3 -m second_brain --vault PATH import file.md --split   # внешний источник → unreviewed
+python3 -m second_brain --vault PATH import-github https://github.com/owner/repo
 python3 -m second_brain --vault PATH backup
 python3 -m second_brain restore backup.zip new-empty-dir
 python3 -m second_brain --vault PATH serve --port 8765
@@ -34,6 +38,16 @@ python3 -m second_brain --vault PATH mcp                       # нужен па
 
 `--vault` и `--state` можно задать через `SECOND_BRAIN_VAULT` / `SECOND_BRAIN_STATE`.
 State (индекс, резервные копии) держите вне vault.
+
+## Импорт с GitHub
+
+Кнопка «GitHub» в панели или `import-github URL` в CLI. Скачивается архив ветки по
+умолчанию; в памяти читаются только `.md`-файлы (без скрытых папок, `node_modules`,
+`vendor`; до 200 файлов и 20 МБ текста, архив до 50 МБ), на диск ничего не распаковывается.
+Репозиторий становится заметкой-проектом, каждый файл — источником `unreviewed` со ссылкой
+на GitHub и связью с проектом, поэтому на графе появляется отдельный кластер. Вики-ссылки
+внутри импортированного текста связями не становятся. Повторный импорт неизменённых файлов
+дубликатов не создаёт. Приватные репозитории — через переменную окружения `GITHUB_TOKEN`.
 
 ## MCP для агентов
 
@@ -79,10 +93,18 @@ source_hash: ""
 
 ## Фронтенд
 
-`second_brain/static/` — готовая сборка панели (three.js, 3d-force-graph; лицензии в
-`THIRD_PARTY_NOTICES.md`). Исходники в `frontend/`; пересборка требует сети:
-`pnpm install && pnpm run build` (версии закреплены в `pnpm-lock.yaml`; сборка
-воспроизводится побайтно).
+`second_brain/static/` — готовая сборка панели (force-graph на canvas, ~200 КБ): граф на весь
+экран, кластеры (label propagation с затравкой по проектам) с цветом и свечением, дуги связей,
+подписи по важности узла. Поверх графа: KPI, поиск по заметкам (Ctrl K; совпадения
+подсвечиваются на графе), выдвижной каталог «Ваши знания» с фильтром по типам, инспектор с Markdown и кликабельными `[[ссылками]]`, режимы
+«Кластеры/Типы» и «Весь граф/Окружение 1–2 шага», «Демо-тур» по ключевым узлам. Заливка
+узла — статус проверки: сплошная — reviewed, полупрозрачная — proposed, пустая — unreviewed.
+
+`examples/showcase-vault` — синтетическая база вымышленной команды; пересобирается
+`python examples/build_showcase.py`. Исходники панели в `frontend/`; пересборка требует сети:
+`pnpm install && pnpm run build` (версии закреплены в `pnpm-lock.yaml`, пакеты моложе
+14 дней не ставятся; сборка воспроизводится побайтно и заново пишет
+`THIRD_PARTY_NOTICES.md` по реально вошедшим в бандл пакетам).
 
 ## Происхождение
 

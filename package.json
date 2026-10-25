@@ -5,6 +5,6 @@
   "scripts": {
     "build": "node frontend/build.mjs"
   },
-  "dependencies": {"3d-force-graph": "1.80.0", "three": "0.180.0"},
+  "dependencies": {"force-graph": "1.52.0"},
   "devDependencies": {"esbuild": "0.25.12"}
 }

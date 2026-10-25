@@ -1,2 +1,4 @@
 allowBuilds:
   esbuild: true
+# Skip packages published less than 14 days ago (minutes).
+minimumReleaseAge: 20160
