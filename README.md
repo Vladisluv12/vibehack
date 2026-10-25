@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="docs/media/logo.png" width="120" alt="Жестик"/>
+<a href="https://t.me/zhestik_bot"><img src="https://t.me/i/userpic/320/zhestik_bot.jpg" width="120" alt="Открыть @zhestik_bot в Telegram"/></a>
 
 # Жестик 🤟
 
@@ -11,9 +11,7 @@
 
 <br/>
 
-<a href="https://t.me/zhestik_bot"><img src="https://img.shields.io/badge/Открыть_бота-@zhestik__bot-26A5E4?style=for-the-badge&logo=telegram&logoColor=white" alt="Telegram-бот"/></a>
-&nbsp;
-<a href="https://zhestik.example.ru"><img src="https://img.shields.io/badge/Открыть_сайт-Жестик-6C4CF5?style=for-the-badge&logo=googlechrome&logoColor=white" alt="Сайт"/></a>
+<a href="https://t.me/zhestik_bot"><img src="https://img.shields.io/badge/Открыть_бота-@zhestik__bot-26A5E4?style=for-the-badge&logo=telegram&logoColor=white" alt="Открыть бота в Telegram"/></a>
 
 <br/><br/>
 
@@ -28,35 +26,6 @@
 
 ---
 
-## 🎬 Демо
-
-<table>
-  <tr>
-    <td align="center" width="33%">
-      <img src="docs/media/bot-videonote.gif" alt="Кружок в боте" width="260"/><br/>
-      <b>1. Записываешь кружок</b><br/>
-      <sub>прямо в чате с ботом</sub>
-    </td>
-    <td align="center" width="33%">
-      <img src="docs/media/bot-result.png" alt="Ответ бота" width="260"/><br/>
-      <b>2. Получаешь перевод</b><br/>
-      <sub>текст + уверенность по каждому слову</sub>
-    </td>
-    <td align="center" width="33%">
-      <img src="docs/media/bot-start.png" alt="Меню бота" width="260"/><br/>
-      <b>3. Удобное меню</b><br/>
-      <sub>инструкция, словарь, статус модели</sub>
-    </td>
-  </tr>
-</table>
-
-<div align="center">
-  <img src="docs/media/site.png" alt="Веб-версия Жестика" width="88%"/><br/>
-  <sub>Веб-версия: запись с камеры в браузере, загрузка файла, озвучка перевода, светлая и тёмная тема</sub>
-</div>
-
----
-
 ## ✨ Возможности
 
 |  |  |
@@ -65,9 +34,9 @@
 | 🧩 **Фразы, а не только слова** | Длинное видео разбивается скользящим окном, жесты складываются во фразу: *«Привет, я рад»* |
 | 🎯 **Уверенность модели** | Для каждого слова — вероятность; если модель сомневается, показываются похожие варианты |
 | 📚 **400 жестов** | Словарь с поиском и алфавитным указателем — в боте и на сайте |
+| 🌗 **Веб-версия** | Запись с камеры в браузере, загрузка файла, озвучка перевода, светлая и тёмная тема |
 | ⚡ **Работает на CPU** | Модель ~1–2 млн параметров, видеокарта нужна только для быстрого обучения |
 | 🔄 **Горячая замена модели** | Бот и сайт сами подхватывают новую модель — без перезапуска |
-| 🖥️ **Распределённая подготовка данных** | Извлечение точек делится между несколькими ПК и собирается одной командой |
 
 ---
 
@@ -167,7 +136,11 @@ pip install -r requirements-training.txt
 pip install aiogram aiohttp-socks python-decouple fastapi "uvicorn[standard]" python-multipart
 ```
 
-> PyTorch ставится отдельно: CUDA-сборка для обучения на GPU или `pip install torch --index-url https://download.pytorch.org/whl/cpu` для CPU.
+PyTorch ставится отдельно: CUDA-сборка для обучения на GPU или для CPU:
+
+```bash
+pip install torch --index-url https://download.pytorch.org/whl/cpu
+```
 
 ### 2. Настройка
 
@@ -178,7 +151,7 @@ BOT_TOKEN=123456:ABC-токен-от-BotFather
 TG_PROXY=socks5://127.0.0.1:12334
 ```
 
-`TG_PROXY` — необязательно, SOCKS-порт VPN-клиента, если Telegram недоступен напрямую.
+`TG_PROXY` — необязательно: SOCKS-порт VPN-клиента, если Telegram недоступен напрямую.
 
 Модель, которую используют бот и сайт, лежит в `models/sign_gru.pt`.
 
@@ -198,7 +171,7 @@ python src/translator/bot.py
 python src/web/app.py
 ```
 
-> Камера в браузере работает только на `localhost` или по `https`.
+Камера в браузере работает только на `localhost` или по `https`.
 
 ### 4. Вебка в реальном времени и распознавание файла
 
@@ -216,7 +189,7 @@ python src/translator/recognizer.py path/to/video.mp4
 
 <br/>
 
-**1. Датасет.** Скачай [Slovo](https://github.com/hukenovs/slovo) и распакуй в `data/slovo/` (`annotations.csv`, `train/`, `test/`).
+**1. Датасет.** Скачай Slovo и распакуй в `data/slovo/` (`annotations.csv`, `train/`, `test/`).
 
 **2. Словарь.**
 
@@ -283,7 +256,6 @@ vibehack/
 │       └── static/index.html    # веб-интерфейс
 ├── configs/                     # пространства поиска гиперпараметров
 ├── tests/                       # unit-тесты обучения
-├── docs/media/                  # скриншоты и демо для README
 ├── data/                        # датасет и точки (в .gitignore)
 └── runs/                        # результаты обучений (в .gitignore)
 ```
@@ -312,13 +284,9 @@ vibehack/
 
 <br/>
 
-### Попробовать
+<a href="https://t.me/zhestik_bot"><img src="https://img.shields.io/badge/Попробовать-@zhestik__bot-26A5E4?style=for-the-badge&logo=telegram&logoColor=white" alt="Открыть бота в Telegram"/></a>
 
-<a href="https://t.me/zhestik_bot"><img src="https://img.shields.io/badge/Telegram-@zhestik__bot-26A5E4?style=for-the-badge&logo=telegram&logoColor=white" alt="Telegram-бот"/></a>
-&nbsp;
-<a href="https://zhestik.example.ru"><img src="https://img.shields.io/badge/Сайт-Жестик-6C4CF5?style=for-the-badge&logo=googlechrome&logoColor=white" alt="Сайт"/></a>
-
-<br/>
+<br/><br/>
 
 Сделано с 💜 на хакатоне «Вайбкодинг ФКН»
 
