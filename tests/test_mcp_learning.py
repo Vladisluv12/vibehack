@@ -60,6 +60,30 @@ class GatewayTests(unittest.TestCase):
         self.assertFalse(result['truncated'])
         self.assertTrue(search(self.brain, self.learning, 'кэширование', top_k=1)['truncated'])
 
+    def test_eval_material_neither_crowds_out_results_nor_reads_by_id(self):
+        for i in range(5):
+            self.brain.create(f'Задача {i}', 'кэширование кэширование кэширование', review='reviewed', source=f'eval:t{i}')
+        normal = self.brain.create('Обычная', 'кэширование', review='reviewed')
+        self.brain.sync()
+        result = search(self.brain, self.learning, 'кэширование', top_k=1)
+        self.assertEqual(([n['id'] for n in result['items']], result['total'], result['truncated']), ([normal], 1, False))
+        hidden = self.brain.list('Задача')['items'][0]['id']
+        self.brain.close()
+        with mock.patch.dict(sys.modules, {'fastmcp': types.SimpleNamespace(FastMCP=FakeMCP)}):
+            tools = build(self.root/'vault', self.root/'state').tools
+        with self.assertRaises(ValueError):
+            tools['get_document'](hidden)
+        with self.assertRaises(ValueError):
+            tools['get_related'](hidden)
+        self.assertEqual(tools['get_document'](normal)['id'], normal)
+        self.brain = Brain(self.root/'vault', self.root/'state')
+
+    def test_review_status_only_breaks_exact_relevance_ties(self):
+        better = self.brain.create('Сборка кэш', 'кэш кэш кэш сборка', review='proposed')
+        worse = self.brain.create('Заметка', 'длинный текст про всё подряд и немного про кэш', review='reviewed')
+        self.brain.sync()
+        self.assertEqual([n['id'] for n in search(self.brain, self.learning, 'кэш')['items']], [better, worse])
+
     def test_usage_separates_served_from_helpful(self):
         notes = [self.brain.create(f'Заметка {i}', 'общий термин', review='reviewed') for i in range(3)]
         self.brain.sync()

@@ -329,12 +329,14 @@ class Brain:
                             warnings.append({"path": rel, "link": target, "error": "ambiguous" if matches else "unresolved"})
         return {"notes": len(records), "links": self.db.execute('SELECT count(*) FROM links').fetchone()[0], "warnings": warnings[:100], "warning_count": len(warnings)}
 
-    def list(self, query="", kind="", offset=0, limit=100, any_terms=False):
+    def list(self, query="", kind="", offset=0, limit=100, any_terms=False, hide_source_prefix=""):
         if kind and kind not in KINDS:
             raise ValueError("Unknown note kind")
         offset, limit = max(0, int(offset)), min(500, max(1, int(limit)))
-        args = [kind, kind]
-        where = "(?='' OR n.kind=?)"
+        # hide_source_prefix filters before LIMIT, so hidden notes neither leak nor crowd out results.
+        hidden = hide_source_prefix.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_') + '%' if hide_source_prefix else ''
+        args = [kind, kind, hidden, hidden]
+        where = "(?='' OR n.kind=?) AND (?='' OR coalesce(json_extract(n.meta,'$.source'),'') NOT LIKE ? ESCAPE '\\')"
         tokens = re.findall(r"\w+", query[:300], re.UNICODE)
         if tokens:
             where += " AND n.id IN (SELECT id FROM search WHERE search MATCH ?)"
@@ -347,7 +349,8 @@ class Brain:
             rows = [dict(r) for r in self.db.execute('''SELECT n.id,n.path,n.title,n.kind,n.review,n.hash,
                 bm25(search,0,5,1) AS score, snippet(search,2,'','', ' … ',24) AS excerpt
                 FROM search JOIN notes n ON n.id=search.id
-                WHERE (?='' OR n.kind=?) AND search MATCH ? ORDER BY score,n.id LIMIT ? OFFSET ?''', (*args,limit,offset))]
+                WHERE (?='' OR n.kind=?) AND (?='' OR coalesce(json_extract(n.meta,'$.source'),'') NOT LIKE ? ESCAPE '\\')
+                AND search MATCH ? ORDER BY score,n.id LIMIT ? OFFSET ?''', (*args,limit,offset))]
         else:
             rows = [dict(r) for r in self.db.execute("SELECT id,path,title,kind,review,hash FROM notes n WHERE " + where + " ORDER BY title,id LIMIT ? OFFSET ?", (*args, limit, offset))]
         return {"items": rows, "total": total, "offset": offset, "next": offset+len(rows) if offset+len(rows)<total else None}
