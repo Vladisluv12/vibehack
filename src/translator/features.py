@@ -46,6 +46,13 @@ WORDS = {
 }
 NONE = "_none"
 
+# Если рядом лежит vocab.json (делает make_vocab.py), словарь берётся из него —
+# так можно расширить его до сотен слов, не переписывая код. Иначе — WORDS выше.
+VOCAB_FILE = Path(__file__).with_name("vocab.json")
+if VOCAB_FILE.exists():
+    import json
+    WORDS = {k: tuple(v) for k, v in json.loads(VOCAB_FILE.read_text(encoding="utf-8")).items()}
+
 WINDOW_SEC = 1.6   # окно в реальном времени ≈ средняя длина клипа в Slovo (~50 кадров)
 SEQ_LEN = 32       # до скольких кадров пережимаем клип перед подачей в модель
 

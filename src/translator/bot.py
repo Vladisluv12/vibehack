@@ -69,7 +69,6 @@ def get_recognizer():
             logging.warning("не удалось загрузить модель, попробую позже", exc_info=True)
     return recognizer
 
-WORD_LIST = "\n".join(f"• {ru(w)}" for w in WORDS if w != NONE)
 
 BTN_HELP = "📖 Как пользоваться"
 BTN_WORDS = "📝 Список слов"
@@ -113,7 +112,16 @@ DONATE_TEXT = (
     "Каждый донат помогает учить Жестика новым словам 🌱\n"
     "Спасибо! 🤟"
 )
-WORDS_TEXT = f"📝 <b>Слова, которые я знаю</b> ({len(WORDS) - 1}):\n\n{WORD_LIST}\n\nСкоро выучу больше 🌱"
+
+
+def words_text():
+    """Список слов берём из загруженной модели: словарь (vocab.json) мог уже вырасти, а модель — ещё нет."""
+    rec = get_recognizer()
+    ids = [w for w in (rec.classes if rec else WORDS) if w != NONE]
+    names = sorted(ru(w) for w in ids)
+    sep = "\n" if len(names) <= 40 else ", "      # длинный список — в строку, чтобы влез в сообщение
+    body = sep.join(f"• {n}" for n in names) if sep == "\n" else sep.join(names)
+    return f"📝 <b>Слова, которые я знаю</b> ({len(names)}):\n\n{body}\n\nСкоро выучу больше 🌱"
 
 def format_result(r):
     lines = []
@@ -149,7 +157,7 @@ async def cmd_help(message: Message):
 @dp.message(Command("words"))
 @dp.message(F.text == BTN_WORDS)
 async def cmd_words(message: Message):
-    await message.answer(WORDS_TEXT, reply_markup=KEYBOARD)
+    await message.answer(words_text(), reply_markup=KEYBOARD)
 
 
 @dp.message(Command("donate"))
