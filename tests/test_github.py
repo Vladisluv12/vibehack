@@ -130,6 +130,19 @@ class GitHubTests(unittest.TestCase):
         self.brain.sync()
         self.assertEqual(self.brain.get(third['sources'][0])['meta']['supersedes'], new_setup)
 
+    def test_reverting_content_continues_the_version_chain(self):
+        a = [(ROOT + 'docs/setup.md', b'# A\n')]
+        b = [(ROOT + 'docs/setup.md', b'# B\n')]
+        v1 = import_github(self.brain, 'acme/tools', github(SHA1, a))['sources'][0]
+        v2 = import_github(self.brain, 'acme/tools', github(SHA2, b))['sources'][0]
+        third = import_github(self.brain, 'acme/tools', github('c' * 40, a))
+        self.brain.sync()
+        v3 = third['sources'][0]
+        self.assertNotIn(v3, (v1, v2))
+        self.assertEqual(self.brain.get(v3)['meta']['supersedes'], v2)
+        again = import_github(self.brain, 'acme/tools', github('d' * 40, a))
+        self.assertEqual((again['sources'][0], again['changed']), (v3, 0))
+
     def test_branch_metadata_must_name_a_commit(self):
         def bad(url, limit):
             if url.endswith('/branches/main'):

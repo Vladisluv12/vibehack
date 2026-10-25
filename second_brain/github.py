@@ -147,7 +147,9 @@ def import_github(brain, url, fetcher=None):
             changed += 1
         sources.append(brain.create(f'{repo}/{path}'[:200], text, kind='source', review='unreviewed',
                                     source=f'{home}/blob/{commit}/{quote(path)}', source_hash=digest(raw),
-                                    key=f'{home}#{path}@{digest(raw)}', links=[project],
+                                    # A new version is new even if it equals an older one (A→B→A).
+                                    key=f'{home}#{path}@{digest(raw)}' + (f'@{commit}' if previous else ''),
+                                    links=[project],
                                     external_content=True, extra=extra))
     run = brain.create(f'{owner}/{repo} @ {commit[:12]}',
                        f'Импорт ветки `{branch}`, коммит `{commit}`. Markdown-файлов: {len(files)}, '
