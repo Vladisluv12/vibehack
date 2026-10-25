@@ -1,3 +1,8 @@
 .venv/
 .venv-win/
 data/
+
+__pycache__/
+*.pyc
+runs/
+models/

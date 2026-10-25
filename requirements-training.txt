@@ -1,0 +1,3 @@
+-r requirements-vision.txt
+# Install the CUDA build of torch separately; preserve the existing GPU installation.
+scikit-learn>=1.5,<2

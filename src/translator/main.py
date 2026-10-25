@@ -1,4 +1,11 @@
+"""Проверка камеры и точек Holistic с периодическим статусом."""
+import argparse
 import time
+
+from console import LiveStatus, add_log_arguments, configure_console
+
+if __name__ == "__main__":
+    configure_console()
 import cv2
 import mediapipe as mp
 
@@ -49,48 +56,73 @@ def put_status(frame, fps, res):
 
 
 def main():
+    ap = argparse.ArgumentParser(description=__doc__)
+    add_log_arguments(ap)
+    args = ap.parse_args()
+    print(f"Открытие камеры {CAM_INDEX}…", flush=True)
     cap = cv2.VideoCapture(CAM_INDEX, cv2.CAP_V4L2)
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, WIDTH)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, HEIGHT)
     if not cap.isOpened():
+        cap.release()
         raise SystemExit(f"Не удалось открыть камеру {CAM_INDEX}. Проверь: ls /dev/video*")
 
+    print(f"Камера открыта: {int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))}×"
+          f"{int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))}. Инициализация Holistic…", flush=True)
+    print("Выход: q / Esc или Ctrl+C.", flush=True)
+    live = LiveStatus(args.log_interval)
+    reason = "выход пользователя"
     prev = time.time()
     fps = 0.0
 
-    with mp_holistic.Holistic(
-        model_complexity=1,           # 0 — быстрее, 2 — точнее
-        smooth_landmarks=True,
-        min_detection_confidence=0.5,
-        min_tracking_confidence=0.5,
-    ) as holistic:
-        while True:
-            ok, frame = cap.read()
-            if not ok:
-                print("Кадр не получен")
-                break
+    try:
+        with mp_holistic.Holistic(
+            model_complexity=1,           # 0 — быстрее, 2 — точнее
+            smooth_landmarks=True,
+            min_detection_confidence=0.5,
+            min_tracking_confidence=0.5,
+        ) as holistic:
+            print("Holistic готов. Обработка кадров…", flush=True)
+            while True:
+                ok, frame = cap.read()
+                if not ok:
+                    reason = "камера перестала выдавать кадры"
+                    print("ОШИБКА: кадр с камеры не получен.", flush=True)
+                    break
 
-            # MediaPipe ждёт RGB; writeable=False ускоряет обработку
-            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            rgb.flags.writeable = False
-            res = holistic.process(rgb)
+                # MediaPipe ждёт RGB; writeable=False ускоряет обработку
+                rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                rgb.flags.writeable = False
+                res = holistic.process(rgb)
 
-            draw_landmarks(frame, res)
+                draw_landmarks(frame, res)
 
-            # зеркалим ПОСЛЕ обработки, чтобы MediaPipe не путал левую и правую руку
-            frame = cv2.flip(frame, 1)
+                # зеркалим ПОСЛЕ обработки, чтобы MediaPipe не путал левую и правую руку
+                frame = cv2.flip(frame, 1)
 
-            now = time.time()
-            fps = 0.9 * fps + 0.1 * (1.0 / max(now - prev, 1e-6))  # сглаженный FPS
-            prev = now
-            put_status(frame, fps, res)
+                now = time.time()
+                fps = 0.9 * fps + 0.1 * (1.0 / max(now - prev, 1e-6))  # сглаженный FPS
+                prev = now
+                put_status(frame, fps, res)
+                def marks(value):
+                    return "найдена" if value else "нет"
+                live.tick(f"поза: {marks(res.pose_landmarks)} | "
+                          f"левая рука: {marks(res.left_hand_landmarks)} | "
+                          f"правая рука: {marks(res.right_hand_landmarks)}")
 
-            cv2.imshow("RSL Translator - landmarks", frame)
-            if cv2.waitKey(1) & 0xFF in (ord("q"), 27):
-                break
+                cv2.imshow("RSL Translator - landmarks", frame)
+                if cv2.waitKey(1) & 0xFF in (ord("q"), 27):
+                    break
+    except KeyboardInterrupt:
+        reason = "остановлено пользователем"
+    except BaseException:
+        reason = "ошибка обработки"
+        raise
+    finally:
+        cap.release()
+        cv2.destroyAllWindows()
+        live.finish(reason)
 
-    cap.release()
-    cv2.destroyAllWindows()
 
 
 if __name__ == "__main__":

@@ -1,0 +1,10 @@
+{
+  "arch": ["gru", "attn_gru", "transformer"],
+  "hidden": [128, 192],
+  "layers": [2],
+  "dropout": [0.3],
+  "lr": [0.0003, 0.001],
+  "batch_size": [32],
+  "balance": ["sqrt"],
+  "seq_len": [32]
+}
