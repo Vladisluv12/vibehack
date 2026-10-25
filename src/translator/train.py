@@ -4,6 +4,7 @@ train — data/slovo_kp/train, валидация — data/slovo_kp/test (офи
 
 python train.py
 python train.py --epochs 120 --hidden 256
+python train.py --device cuda  # требовать обучение на NVIDIA GPU
 """
 import argparse
 import random
@@ -18,6 +19,17 @@ from features import (WORDS, KP_DIR, MODEL_PATH, make_input, N_XYZ, SL_LH, SL_RH
                       SL_RH_LOCAL, FLAG_LH, FLAG_RH, PT_LH, PT_RH, PT_LH_LOCAL, PT_RH_LOCAL,
                       POSE_PAIRS, SEQ_LEN, FEAT_DIM)
 from model import SignGRU
+
+
+def select_device(requested):
+    if requested == "cuda" and not torch.cuda.is_available():
+        raise SystemExit(
+            "CUDA недоступна. Проверь nvidia-smi и установи PyTorch с CUDA "
+            "в активное окружение Python. Для CPU укажи --device cpu."
+        )
+    if requested == "auto":
+        requested = "cuda" if torch.cuda.is_available() else "cpu"
+    return torch.device(requested)
 
 
 def load(split_dir, classes):
@@ -93,8 +105,10 @@ class Clips(Dataset):
 def evaluate(model, loader, n_cls):
     model.eval()
     cm = np.zeros((n_cls, n_cls), int)
+    device = next(model.parameters()).device
     for x, y in loader:
-        pred = model(x).argmax(1)
+        x = x.to(device, non_blocking=device.type == "cuda")
+        pred = model(x).argmax(1).cpu()
         for t, p in zip(y.tolist(), pred.tolist()):
             cm[t, p] += 1
     return cm.trace() / max(cm.sum(), 1), cm
@@ -106,7 +120,14 @@ def main():
     ap.add_argument("--out", type=Path, default=MODEL_PATH)
     ap.add_argument("--epochs", type=int, default=100)
     ap.add_argument("--hidden", type=int, default=192)
+    ap.add_argument("--device", choices=("auto", "cuda", "cpu"), default="auto",
+                    help="auto: CUDA при наличии GPU, иначе CPU; cuda: требовать GPU")
     args = ap.parse_args()
+    device = select_device(args.device)
+    use_cuda = device.type == "cuda"
+    print(f"Устройство обучения: {device}")
+    if use_cuda:
+        print(f"GPU: {torch.cuda.get_device_name(device)}")
 
     torch.manual_seed(0); random.seed(0); np.random.seed(0)
     classes = [w for w in WORDS if any((args.data / "train" / w).glob("*.npy"))]
@@ -117,8 +138,9 @@ def main():
     print("клипов в train по классам:", {c: int((ytr == i).sum()) for i, c in enumerate(classes)})
     print(f"train: {len(ytr)}  val (test): {len(yva)}")
 
-    train_dl = DataLoader(Clips(Xtr, ytr, True), batch_size=32, shuffle=True)
-    val_dl = DataLoader(Clips(Xva, yva, False), batch_size=64)
+    train_dl = DataLoader(Clips(Xtr, ytr, True), batch_size=32, shuffle=True,
+                          pin_memory=use_cuda)
+    val_dl = DataLoader(Clips(Xva, yva, False), batch_size=64, pin_memory=use_cuda)
 
     # no_event в Slovo в 20 раз больше, чем любого слова — уравновешиваем вес классов
     counts = np.bincount(ytr, minlength=len(classes)).astype(np.float32)
@@ -126,10 +148,10 @@ def main():
     weights /= weights.mean()
 
     in_dim = FEAT_DIM * 2
-    model = SignGRU(in_dim, len(classes), args.hidden)
+    model = SignGRU(in_dim, len(classes), args.hidden).to(device)
     opt = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-2)
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, args.epochs)
-    loss_fn = nn.CrossEntropyLoss(weight=weights, label_smoothing=0.1)
+    loss_fn = nn.CrossEntropyLoss(weight=weights.to(device), label_smoothing=0.1)
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
     best = -1.0
@@ -137,6 +159,8 @@ def main():
         model.train()
         total, correct, loss_sum = 0, 0, 0.0
         for x, t in train_dl:
+            x = x.to(device, non_blocking=use_cuda)
+            t = t.to(device, non_blocking=use_cuda)
             logits = model(x)
             loss = loss_fn(logits, t)
             opt.zero_grad(); loss.backward()
@@ -156,7 +180,7 @@ def main():
                   f"val_acc {val_acc:.3f}  best {best:.3f}")
 
     if len(yva):
-        ckpt = torch.load(args.out, map_location="cpu")
+        ckpt = torch.load(args.out, map_location=device)
         model.load_state_dict(ckpt["state"])
         acc, cm = evaluate(model, val_dl, len(classes))
         print(f"\nлучшая val accuracy: {acc:.3f}")

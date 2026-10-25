@@ -1,0 +1,8 @@
+# Legacy MediaPipe Holistic used by src/translator (Python 3.12).
+# Install PyTorch with the CUDA build separately; this file does not replace it.
+mediapipe==0.10.14
+numpy==1.26.4
+opencv-contrib-python==4.11.0.86
+# MediaPipe imports JAX; keep versions compatible with NumPy 1.26.
+jax==0.4.38
+jaxlib==0.4.38

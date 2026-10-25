@@ -10,7 +10,7 @@ mp_draw = mp.solutions.drawing_utils
 mp_styles = mp.solutions.drawing_styles
 
 PROJECT = Path(__file__).resolve().parents[2]      # .../vibehack
-SLOVO_DIR = PROJECT / "slovo"
+SLOVO_DIR = PROJECT / "data" / "slovo"
 KP_DIR = PROJECT / "data" / "slovo_kp"              # сюда extract_slovo.py кладёт точки
 MODEL_PATH = PROJECT / "models" / "sign_gru.pt"
 
