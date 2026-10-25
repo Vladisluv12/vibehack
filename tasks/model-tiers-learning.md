@@ -39,5 +39,6 @@ Spec: `specs/model-tiers-learning.md`. База: `vibehack@a598515`, ветка 
 - [ ] S6 (`review_at`, прогнозы) — отложено до замера фазы 2
 
 ## Review
-- [ ] security review: журнал, ingest, GitHub-токен в redirect, web-границы (идёт)
+- [x] независимое ревью GPT-6.1 Sol ×2: 6 P1 и 20 P2 исправлены, restore без журнала принят; остались
+      ограничения: стоимость со слов агента, нет песочницы ОС для агента, DNS rebinding в lint --online
 - [x] обновить README (новые CLI и MCP-инструменты)
