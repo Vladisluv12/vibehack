@@ -11,9 +11,11 @@ from collections import defaultdict
 import json
 from pathlib import Path
 import re
+import ipaddress
+import socket
 from urllib.error import HTTPError
 from urllib.parse import urlsplit
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from .brain import LINK, LINK_METADATA, declared_links, digest, parse_note, without_fences
 from .redact import redact
@@ -30,8 +32,38 @@ def _nonempty(value):
     return bool(value.strip()) if isinstance(value, str) else bool(value)
 
 
+def public_url(url):
+    """Sources are untrusted: only http(s) URLs whose every address is public.
+
+    Blocks loopback, private, link-local (cloud metadata) and reserved ranges, also
+    after each redirect. A resolver that answers differently on connect (DNS
+    rebinding) is not fully excluded by a check before the request.
+    """
+    parts = urlsplit(url)
+    if parts.scheme not in ('http', 'https') or not parts.hostname:
+        raise ValueError('only http(s) URLs with a host are checked')
+    try:
+        infos = socket.getaddrinfo(parts.hostname, parts.port or (443 if parts.scheme == 'https' else 80))
+    except OSError as exc:
+        raise ValueError(f'unresolvable host: {exc}') from None
+    for info in infos:
+        if not ipaddress.ip_address(info[4][0].split('%')[0]).is_global:
+            raise ValueError(f'non-public address {info[4][0]}')
+    return url
+
+
+class _PublicRedirects(HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return super().redirect_request(req, fp, code, msg, headers, public_url(newurl))
+
+
+def urlopen(request, timeout):
+    public_url(request.full_url)
+    return build_opener(_PublicRedirects).open(request, timeout=timeout)
+
+
 def _fetch_status(url):
-    """urllib follows redirects; servers that reject HEAD get a GET instead."""
+    """Redirects are followed only to public addresses; servers that reject HEAD get a GET instead."""
     for method in ('HEAD', 'GET'):
         try:
             with urlopen(Request(url, method=method), timeout=10) as response:

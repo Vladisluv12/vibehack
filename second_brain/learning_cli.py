@@ -66,7 +66,8 @@ def run(args):
             reviewer_meta = {'agent_model': args.llm.stem} if args.cmd == 'review' else None
             brain = Brain(args.vault, args.state, actor='agent:reviewer' if args.cmd == 'review' else 'human:local',
                           actor_meta=reviewer_meta)
-            brain.sync()
+            if args.cmd != 'lint':  # lint reads the files itself and must explain a vault sync rejects
+                brain.sync()
         if args.cmd == 'lint':
             report = lint.lint(brain, online=args.online)
             return report, lint.exit_code(report)

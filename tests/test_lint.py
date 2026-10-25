@@ -6,7 +6,7 @@ from unittest import mock
 from urllib.error import HTTPError
 
 from second_brain.brain import Brain
-from second_brain.lint import exit_code, lint
+from second_brain.lint import _PublicRedirects, exit_code, lint, public_url
 
 
 class LintTests(unittest.TestCase):
@@ -134,6 +134,53 @@ class LintTests(unittest.TestCase):
             self.assertEqual(lint(self.brain, online=True)['warnings'], [])
         self.assertEqual([call.args[0].get_method() for call in opener.call_args_list], ['HEAD', 'GET'])
         self.assertTrue(all(call.kwargs['timeout'] == 10 for call in opener.call_args_list))
+
+
+class PublicUrlTests(unittest.TestCase):
+    def resolve(self, address):
+        return mock.patch('second_brain.lint.socket.getaddrinfo', return_value=[(2, 1, 6, '', (address, 80))])
+
+    def test_internal_addresses_are_never_requested(self):
+        for address in ('169.254.169.254', '127.0.0.1', '10.0.0.5', '192.168.1.1', '::1', 'fd00::1'):
+            with self.resolve(address), self.assertRaises(ValueError):
+                public_url('http://metadata.example/latest/')
+        with self.resolve('93.184.216.34'):
+            self.assertEqual(public_url('https://example.com/x'), 'https://example.com/x')
+        for url in ('file:///etc/passwd', 'ftp://example.com/x', 'http:///nohost'):
+            with self.assertRaises(ValueError):
+                public_url(url)
+
+    def test_redirect_to_internal_address_is_refused(self):
+        from urllib.request import Request
+        with self.resolve('127.0.0.1'), self.assertRaises(ValueError):
+            _PublicRedirects().redirect_request(Request('https://example.com/'), None, 302, 'Found', {},
+                                                'http://localhost:8765/api')
+
+    def test_default_fetch_reports_internal_source_without_requesting_it(self):
+        with tempfile.TemporaryDirectory() as temp:
+            brain = Brain(Path(temp)/'v', Path(temp)/'s')
+            brain.create('Источник', 'текст', kind='source', review='unreviewed', source='http://169.254.169.254/latest/')
+            brain.sync()
+            with mock.patch('second_brain.lint.build_opener', side_effect=AssertionError('requested')):
+                report = lint(brain, online=True)
+            brain.close()
+        self.assertEqual([w['code'] for w in report['warnings'] if w['code'].startswith('source_')], ['source_unreachable'])
+        self.assertIn('non-public', report['warnings'][-1]['detail'])
+
+
+class CliLintTests(unittest.TestCase):
+    def test_cli_lint_explains_duplicate_ids_instead_of_crashing(self):
+        import contextlib, io
+        from second_brain.cli import main
+        with tempfile.TemporaryDirectory() as temp:
+            vault = Path(temp)/'v'; (vault/'Notes').mkdir(parents=True)
+            for name in ('a', 'b'):
+                (vault/'Notes'/f'{name}.md').write_text('---\nid: "' + 'c' * 32 + '"\ntitle: "' + name + '"\n---\n\nтекст\n')
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out), self.assertRaises(SystemExit) as exit_info:
+                main(['--vault', str(vault), '--state', f'{temp}/s', 'lint'])
+        self.assertEqual(exit_info.exception.code, 1)
+        self.assertIn('duplicate_id', {e['code'] for e in json.loads(out.getvalue())['errors']})
 
 
 if __name__ == '__main__':
