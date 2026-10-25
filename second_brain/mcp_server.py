@@ -11,7 +11,7 @@ from .brain import LINK, Brain, without_fences
 MAX_PROPOSED_LINKS = 50
 
 
-def create_draft(brain, title, content, source_ids):
+def propose_draft(brain, title, content, source_ids):
     """Agent draft: cited sources become declared edges; wiki links in the text are
     only suggestions, so an unreviewed draft cannot assert graph relations."""
     if not isinstance(content, str) or len(content) > 100000 or not isinstance(source_ids, list) or len(source_ids) > 30:
@@ -73,7 +73,7 @@ def build(vault: Path, state: Path):
     def create_draft(title: str, content: str, source_ids: list[str]) -> dict:
         """Create a new proposed note with citations. Cannot edit or approve existing notes."""
         with open_vault() as b:
-            return create_draft(b, title, content, source_ids)
+            return propose_draft(b, title, content, source_ids)
 
     return mcp
 
