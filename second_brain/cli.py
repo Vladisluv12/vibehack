@@ -28,7 +28,8 @@ def parser():
     c = cmds.add_parser('demo', help='Copy the synthetic demo vault into --vault if it does not exist')
     c.add_argument('--showcase', action='store_true', help='Larger, densely linked vault for presentations')
     c = cmds.add_parser('serve'); c.add_argument('--port', type=int, default=8765)
-    cmds.add_parser('mcp', help='STDIO MCP gateway (requires fastmcp)')
+    c = cmds.add_parser('mcp', help='STDIO MCP gateway (requires fastmcp)')
+    c.add_argument('--agent-model', default='', help='Model id of the connecting agent; tier comes from state/agents.json')
     return p
 
 
@@ -49,7 +50,7 @@ def main(argv=None):
         return
     if args.cmd == 'mcp':
         from .mcp_server import run
-        return run(args.vault, args.state)
+        return run(args.vault, args.state, args.agent_model)
     brain = Brain(args.vault, args.state)
     try:
         result = brain.sync()
