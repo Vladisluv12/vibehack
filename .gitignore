@@ -1,3 +1,9 @@
 .venv/
-.venv-win/
+slovo.zip
 data/
+slovo/
+models/
+uploads/
+.env
+__pycache__/
+*.pyc
