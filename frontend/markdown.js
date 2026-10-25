@@ -46,7 +46,7 @@ export function parse(markdown) {
       if (paragraph.length) flush();
       const type = item[1] ? 'ol' : 'ul';
       if (list && list.type !== type) flush();
-      list = list || {type, items: []};
+      list = list || (type === 'ol' ? {type, start: Number(item[1]), items: []} : {type, items: []});
       list.items.push(inline(item[2]));
     } else if (!line.trim()) flush();
     else { if (list) flush(); paragraph.push(line.trim()); }

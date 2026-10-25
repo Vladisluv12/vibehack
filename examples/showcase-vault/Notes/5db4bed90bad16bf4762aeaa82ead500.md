@@ -7,6 +7,7 @@ review: "proposed"
 created: "2026-07-10T22:00:00Z"
 source: "agent:second-brain-mcp"
 source_hash: ""
+tags: ["ядро"]
 ---
 
 Предложение агента: пересобирать только файлы с изменившимся mtime или хешем.

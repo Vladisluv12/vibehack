@@ -1,6 +1,6 @@
 let checkpoints=null,checkpointAt=0,checkpointPromise=null;
 import ForceGraph from 'force-graph';
-import { adjacency, communities, degrees, endId, importanceTiers, localSubgraph, withPositions } from './graph-model.js';
+import { adjacency, communities, degrees, endId, importanceTiers, localSubgraph, shortestPath, withPositions } from './graph-model.js';
 import { parse } from './markdown.js';
 
 const $ = id => document.getElementById(id);
@@ -32,26 +32,29 @@ function countUp(node,value,suffix=''){
 }
 
 // ── Model: the whole vault graph, its clusters and node importance ─────────
-let full={nodes:[],links:[]}, total=0, byId=new Map(), groups=[], groupOf=new Map(), tiers=new Map();
+let semantic={links:[]}, semanticOn=true, linkCounts=new Map();
+let full={nodes:[],links:[]}, total=0, byId=new Map(), groups=[], groupOf=new Map(), tiers=new Map(), projectTitles={}, space='human';
+const spaceQuery=()=>space==='all'?{}:{space};
 let graph, shown=new Map(), shownAdj=new Map(), scope='all', depth=1, colorMode='cluster', hover=null, selected=null;
 let searchMatches=null, legendFocus=null, lit=null, fitPending=true;
 const flashes=new Map(), runningByProject=new Map();
-const titleOf=id=>byId.get(id)?.title||id;
+const knownTitles=new Map();
+const titleOf=id=>byId.get(id)?.title||knownTitles.get(id)||projectTitles[id]||id;
 const colorOf=id=>{const n=byId.get(id);if(!n)return LONE;return colorMode==='kind'?kindColor[n.kind]||kindColor.note:groups[groupOf.get(id)]?.color||LONE};
 const radius=node=>{const n=byId.get(node.id)||node;return 2.2+Math.sqrt(n.degree||0)*1.3+(n.kind==='project'?1.6:0)};
 const touches=(link,id)=>id&&(endId(link.source)===id||endId(link.target)===id);
 const isHot=link=>hover?touches(link,hover.id):touches(link,selected);
 const phase=id=>parseInt(id.slice(0,6),16)%628/100;
 function buildModel(g){
-  full=g;total=g.total;const degree=degrees(g.links);
+  full=g;total=g.total;projectTitles=g.projects||{};const degree=degrees(g.links);
   byId=new Map(g.nodes.map(n=>[n.id,{...n,degree:degree.get(n.id)||0}]));
   groups=communities(g.nodes,g.links);groupOf=new Map();let colour=0;
   groups.forEach((group,i)=>{
     const lead=byId.get(group.key)?.kind==='project'?byId.get(group.key):[...group.ids].map(id=>byId.get(id)).sort((a,b)=>b.degree-a.degree)[0];
-    group.name=lead?.title||'Без названия';group.color=group.ids.length>1?PALETTE[colour++%PALETTE.length]:LONE;
+    group.name=projectTitles[group.key]||lead?.title||'Без названия';group.color=group.ids.length>1?PALETTE[colour++%PALETTE.length]:LONE;
     for(const id of group.ids)groupOf.set(id,i);
   });
-  tiers=importanceTiers([...byId.values()]);
+  tiers=importanceTiers([...byId.values()]);graphAdj=adjacency(g.links);
 }
 // One set decides what is lit: hover neighbourhood, then legend focus, then search hits.
 function refreshLit(){lit=hover?new Set([hover.id,...(shownAdj.get(hover.id)||[])]):legendFocus?.ids||searchMatches;redraw()}
@@ -80,8 +83,9 @@ function drawNode(node,ctx,scale){
   ctx.save();ctx.globalCompositeOperation='lighter';
   const g=ctx.createRadialGradient(node.x,node.y,r*.3,node.x,node.y,glow);g.addColorStop(0,rgba(c,(tier===0?.5:.26)*a*breath));g.addColorStop(1,rgba(c,0));
   ctx.fillStyle=g;ctx.beginPath();ctx.arc(node.x,node.y,glow,0,TAU);ctx.fill();ctx.restore();
-  const until=flashes.get(node.id);
-  if(until>now){const left=(until-now)/FLASH_MS;ctx.globalAlpha=left;ctx.beginPath();ctx.arc(node.x,node.y,r+2+(1-left)*16,0,TAU);ctx.strokeStyle=c;ctx.lineWidth=2/scale;ctx.stroke()}
+  const glowing=flashes.get(node.id);
+  if(glowing&&glowing.until>now){const left=(glowing.until-now)/glowing.dur;ctx.save();ctx.globalCompositeOperation='lighter';ctx.globalAlpha=left;ctx.beginPath();ctx.arc(node.x,node.y,r+2+(1-left)*18,0,TAU);ctx.strokeStyle=glowing.color||c;ctx.lineWidth=2.2/scale;ctx.stroke();ctx.globalAlpha=left*.35;ctx.fillStyle=glowing.color||c;ctx.beginPath();ctx.arc(node.x,node.y,r*2.4,0,TAU);ctx.fill();ctx.restore()}
+  else if(glowing)flashes.delete(node.id);
   ctx.beginPath();ctx.arc(node.x,node.y,r,0,TAU);
   if(node.review==='unreviewed'){ctx.globalAlpha=a;ctx.fillStyle=BG;ctx.fill();ctx.fillStyle=rgba(c,.22);ctx.fill();ctx.strokeStyle=c;ctx.lineWidth=Math.max(1/scale,r*.32);ctx.stroke()}
   else{ctx.globalAlpha=a*(node.review==='proposed'?.5:1);ctx.fillStyle=c;ctx.fill();if(node.review==='proposed'){ctx.globalAlpha=a;ctx.strokeStyle=c;ctx.lineWidth=Math.max(1/scale,r*.28);ctx.stroke()}}
@@ -92,7 +96,7 @@ function drawNode(node,ctx,scale){
   ctx.globalAlpha=1;
 }
 // Floating panels the labels must not run under; re-measured at most twice a second.
-const HUD=['.hud-left','.command','.actions','.kpis','#inspector','#drawer','.legend','.toolbar','#activity-panel'];
+const HUD=['.hud-left','.command','.actions','.kpis','#inspector','#drawer','#chat','.chat-fab','.legend','.toolbar','#activity-panel'];
 let hudBoxes=[],hudAt=0;
 function hud(){const now=performance.now();if(now-hudAt>500){hudAt=now;hudBoxes=HUD.map(s=>document.querySelector(s)).filter(e=>e&&!e.hidden&&!e.closest('[hidden]')).map(e=>{const r=e.getBoundingClientRect();return [r.left-6,r.top-6,r.right+6,r.bottom+6]}).filter(b=>b[2]>b[0])}return hudBoxes}
 // Screen-space labels: hubs large and bright, the rest smaller and fainter; no overlaps.
@@ -106,38 +110,44 @@ function drawLabels(ctx,scale){
     if(!f&&(dim||!(preferred||t===0||(t===1&&scale>.8)||scale>1.7||scope==='local')))continue;
     const size=t===0?15:t===1?12.5:11.5,text=n.title.length>30?n.title.slice(0,28)+'…':n.title;
     ctx.font=`${t===0||n.id===selected?600:450} ${size}px Inter,"Segoe UI",system-ui,sans-serif`;
-    const p=graph.graph2ScreenCoords(n.x,n.y),x=p.x+radius(n)*scale+7,w=ctx.measureText(text).width,box=[x-3,p.y-size/2-3,x+w+3,p.y+size/2+3];
+    const p=graph.graph2ScreenCoords(n.x,n.y),w=ctx.measureText(text).width,gap=radius(n)*scale+7;
+    const x=p.x+gap+w>innerWidth-8?p.x-gap-w:p.x+gap,box=[x-3,p.y-size/2-3,x+w+3,p.y+size/2+3];
     if(!f&&placed.some(b=>box[0]<b[2]&&box[2]>b[0]&&box[1]<b[3]&&box[3]>b[1]))continue;
     placed.push(box);
     ctx.globalAlpha=f||t===0?1:preferred?.95:t===1?.82:.55;ctx.strokeText(text,x,p.y);ctx.fillStyle=f||t===0?'#ffffff':'#d3d8e0';ctx.fillText(text,x,p.y);
   }
+  drawAgentTags(ctx);
   ctx.restore();
 }
 // Pull each cluster toward its own centre so colours form readable regions, and
 // keep disconnected components (e.g. a fresh GitHub import) near the rest.
 function clusterForce(){let nodes=[];const force=alpha=>{const sums=new Map();for(const n of nodes){const g=groupOf.get(n.id),s=sums.get(g)||{x:0,y:0,c:0};s.x+=n.x;s.y+=n.y;s.c++;sums.set(g,s)}for(const n of nodes){n.vx-=n.x*.03*alpha;n.vy-=n.y*.03*alpha;const s=sums.get(groupOf.get(n.id));if(s.c<2)continue;n.vx+=(s.x/s.c-n.x)*.09*alpha;n.vy+=(s.y/s.c-n.y)*.09*alpha}};force.initialize=ns=>{nodes=ns};return force}
 function tooltip(node){const n=byId.get(node.id)||node,tip=el('div',undefined,'graph-tooltip');tip.append(el('strong',n.title),el('small',`${labels[n.kind]} · ${reviewShort[n.review]} · связей: ${n.degree}`),el('small',groups[groupOf.get(n.id)]?.name||''));return tip}
-function linkTooltip(link){const tip=el('div',undefined,'graph-tooltip');tip.append(el('span',titleOf(endId(link.source))),el('small',`→ ${link.relation} →`),el('span',titleOf(endId(link.target))));return tip}
+function linkTooltip(link){const tip=el('div',undefined,'graph-tooltip');if(link.semantic){tip.append(el('span',`${titleOf(endId(link.source))} ≈ ${titleOf(endId(link.target))}`),el('small',`Смысловое сходство ${link.score.toFixed(2)} · явной связи нет`));return tip}tip.append(el('span',titleOf(endId(link.source))),el('small',`→ ${link.relation} →`),el('span',titleOf(endId(link.target))));return tip}
 function initializeGraph(){
   try{
     graph=new ForceGraph($('graph')).backgroundColor('rgba(0,0,0,0)').nodeId('id').nodeRelSize(1).nodeVal(n=>radius(n)**2)
       .nodeCanvasObject(drawNode).nodePointerAreaPaint((node,color,ctx)=>{ctx.fillStyle=color;ctx.beginPath();ctx.arc(node.x,node.y,radius(node)+3,0,TAU);ctx.fill()})
-      .nodeLabel(tooltip).linkLabel(linkTooltip).linkCurvature(.22)
-      .linkColor(l=>{const s=endId(l.source),t=endId(l.target);return rgba(colorOf(s),isHot(l)?.9:lit&&!(lit.has(s)&&lit.has(t))?.03:.26)})
-      .linkWidth(l=>isHot(l)?1.8:.7).linkDirectionalParticleWidth(2.6).linkDirectionalParticleSpeed(.007).linkDirectionalParticleColor(l=>colorOf(endId(l.source)))
+      .nodeLabel(tooltip).linkLabel(linkTooltip).linkCurvature(l=>l.semantic?0:.22).linkLineDash(l=>l.semantic?[2,3]:null)
+      .linkColor(l=>{const s=endId(l.source),t=endId(l.target),a=isHot(l)?.9:lit&&!(lit.has(s)&&lit.has(t))?.03:l.semantic?.3:.26;return rgba(l.semantic?'#e8ecf3':colorOf(s),a)})
+      .linkWidth(l=>isHot(l)?(l.semantic?1.3:1.8):l.semantic?.6:.7).linkDirectionalParticleWidth(2.6).linkDirectionalParticleSpeed(.007).linkDirectionalParticleColor(l=>colorOf(endId(l.source)))
       .onNodeClick(node=>openNote(node.id)).onNodeHover(node=>{hover=node||null;$('graph').style.cursor=node?'pointer':'';refreshLit()})
       .onBackgroundClick(()=>{if(legendFocus){legendFocus=null;renderLegend();refreshLit();status()}})
-      .onRenderFramePre(drawClusterGlow).onRenderFramePost(drawLabels)
+      .onRenderFramePre(drawClusterGlow).onRenderFramePost(postFrame)
       .onEngineStop(()=>{if(fitPending){fitPending=false;fit(reduced?0:900)}})
       .minZoom(.15).maxZoom(10).warmupTicks(reduced?300:0).cooldownTicks(reduced?0:260);
-    graph.d3Force('charge').strength(-95).distanceMax(260);graph.d3Force('link').distance(38);graph.d3Force('cluster',clusterForce());
+    graph.d3Force('charge').strength(-95).distanceMax(260);graph.d3Force('link').distance(38).strength(l=>l.semantic?.04:1/Math.max(1,Math.min(linkCounts.get(endId(l.source))||1,linkCounts.get(endId(l.target))||1)));graph.d3Force('cluster',clusterForce());
     new ResizeObserver(()=>graph.width(innerWidth).height(innerHeight)).observe(document.body);
   }catch(e){graph=null;notify('Граф недоступен в этом браузере: '+e.message,true)}
 }
 const fit=(ms=600,filter)=>graph?.zoomToFit(reduced?0:ms,innerWidth<760?40:120,filter);
 function showGraph(refit=false){
   if(!graph)return;
-  const local=scope==='local'&&selected,next=withPositions(local?localSubgraph(full,selected,depth):full,graph.graphData().nodes);
+  const local=scope==='local'&&selected,base=local?localSubgraph(full,selected,depth):full;
+  // Suggested semantic links: dashed, barely pulling, never part of clusters or degrees.
+  const extra=semanticOn&&!local?semantic.links.filter(l=>byId.has(l.source)&&byId.has(l.target)).map(l=>({...l,relation:'semantic',semantic:true})):[];
+  linkCounts=degrees(base.links);
+  const next=withPositions({nodes:base.nodes,links:[...base.links,...extra]},graph.graphData().nodes);
   shownAdj=adjacency(next.links);shown=new Map(next.nodes.map(n=>[n.id,n]));
   graph.autoPauseRedraw(reduced||next.nodes.length>300);
   if(refit){fitPending=true;if(!reduced)setTimeout(()=>fit(700),900)}
@@ -148,7 +158,8 @@ function status(){
   if(scope==='local'&&selected)text=`Окружение «${titleOf(selected)}» · ${shown.size} узлов`;
   else if(legendFocus)text=`«${legendFocus.name}» · ${legendFocus.ids.size} заметок`;
   else if(searchMatches)text=`Найдено ${searchMatches.size} из ${full.nodes.length}`;
-  $('graph-status').textContent=text;
+  const suggested=semanticOn&&scope!=='local'?semantic.links.filter(l=>byId.has(l.source)&&byId.has(l.target)).length:0;
+  $('graph-status').textContent=text+(suggested?` · ≈ ${suggested} смысловых`:'');
 }
 function renderKpis(){
   const nodes=[...byId.values()],reviewed=nodes.filter(n=>n.review==='reviewed').length;
@@ -170,19 +181,26 @@ function renderLegend(){
 }
 function flash(ids){
   if(!graph)return;const until=performance.now()+FLASH_MS;
-  for(const id of ids){if(!shown.has(id))continue;flashes.set(id,until);if(!reduced)for(const link of graph.graphData().links.filter(l=>touches(l,id)).slice(0,6))graph.emitParticle(link)}
-  graph.autoPauseRedraw(false);clearTimeout(flash.timer);flash.timer=setTimeout(()=>{flashes.clear();graph.autoPauseRedraw(reduced||shown.size>300);redraw()},FLASH_MS+50);
+  for(const id of ids){if(!shown.has(id))continue;flashes.set(id,{until,dur:FLASH_MS});if(!reduced)for(const link of graph.graphData().links.filter(l=>touches(l,id)).slice(0,6))graph.emitParticle(link)}
+  keepAnimating(FLASH_MS+100);
 }
 async function load(refit=false){
-  try{const g=await api('brain/graph');buildModel(g);if(legendFocus)legendFocus=null;renderLegend();renderKpis();showGraph(refit);if(drawerOpen()){renderKindFilter();loadCatalog()}}catch(e){notify(e.message,true)}
+  try{const g=await api('brain/graph?'+new URLSearchParams(spaceQuery()));$('count-human').textContent=g.spaces.human;$('count-agent').textContent=g.spaces.agent;buildModel(g);if(legendFocus)legendFocus=null;renderLegend();renderKpis();showGraph(refit);if(drawerOpen()){renderKindFilter();loadCatalog()}loadSemantic()}catch(e){notify(e.message,true)}
+}
+let semanticSerial=0;
+async function loadSemantic(){
+  const serial=++semanticSerial;
+  try{const result=await api('brain/semantic');if(serial!==semanticSerial)return;semantic=result;showGraph();renderSimilar()}
+  catch(e){if(serial===semanticSerial){semantic={links:[]};showGraph();renderSimilar();notify('Смысловые связи недоступны: '+e.message,true)}}
 }
 
 // ── Inspector ─────────────────────────────────────────────────────────────
-function resolveWiki(target){const key=target.trim().toLowerCase();for(const n of byId.values())if(n.id===key||n.title.toLowerCase()===key||n.path?.replace(/\.md$/,'').toLowerCase()===key)return n.id;return null}
-function renderInline(tokens){
+function resolveWiki(target){const key=target.trim().toLowerCase();for(const n of byId.values())if(n.id===key||n.title.toLowerCase()===key||n.path?.replace(/\.md$/,'').toLowerCase()===key)return n.id;for(const [id,title] of knownTitles)if(id===key||title.toLowerCase()===key)return id;return null}
+function renderInline(tokens,cite=null){
   const out=document.createDocumentFragment();
   for(const tok of tokens){
-    if(tok.t==='text')out.append(tok.v);
+    if(tok.t==='text'&&cite){for(const part of tok.v.split(/(\[\d{1,2}\])/)){const n=part.match(/^\[(\d{1,2})\]$/);out.append(n&&cite(Number(n[1]))||part)}}
+    else if(tok.t==='text')out.append(tok.v);
     else if(tok.t==='code')out.append(el('code',tok.v));
     else if(tok.t==='strong')out.append(el('strong',tok.v));
     else if(tok.t==='em')out.append(el('em',tok.v));
@@ -195,7 +213,7 @@ function renderMarkdown(text){
   const box=$('content');box.replaceChildren();
   for(const block of parse(text.split(/\n## Relations\s*\n/)[0])){
     if(block.type==='code'){const pre=el('pre');pre.append(el('code',block.text));box.append(pre)}
-    else if(block.type==='ul'||block.type==='ol'){const list=el(block.type);for(const item of block.items){const li=el('li');li.append(renderInline(item));list.append(li)}box.append(list)}
+    else if(block.type==='ul'||block.type==='ol'){const list=el(block.type);if(block.start>1)list.start=block.start;for(const item of block.items){const li=el('li');li.append(renderInline(item));list.append(li)}box.append(list)}
     else{const node=el(block.type==='h'?'h4':'p');node.append(renderInline(block.inline));box.append(node)}
   }
 }
@@ -205,9 +223,11 @@ async function openNote(id){
   try{
     const note=await api('brain/note?id='+encodeURIComponent(id));if(selection!==request)return;
     selected=id;currentNote=note;history.replaceState(null,'','#note='+id);
+    for(const r of note.relations){if(r.source_title)knownTitles.set(r.source,r.source_title);if(r.target_title)knownTitles.set(r.target,r.target_title)}
+    if(chatOpen())setChat(false);
     $('inspector').hidden=false;$('editing').hidden=true;$('content').hidden=false;
     $('note-kind').textContent=labels[note.kind];$('note-kind').style.color=kindColor[note.kind];$('note-title').textContent=note.title;
-    $('review').textContent=reviews[note.review];$('review').className='review '+note.review;
+    $('review').textContent=reviews[note.review];$('review').className='review '+note.review;$('note-space').textContent=note.space==='agent'?'Агент':'Человек';$('note-space').className='space-badge '+note.space;
     const group=groups[groupOf.get(id)];$('note-cluster').hidden=!group||group.ids.length<2;if(group){$('note-cluster').textContent=group.name;$('note-cluster').style.setProperty('--dot',group.color)}
     $('metadata').replaceChildren();
     for(const [key,value] of [['Источник',note.meta.source],['Создано',note.meta.created?.slice(0,10)],['Проект',note.meta.project],['Раздел',note.meta.source_section],['Исполнение',note.meta.execution_status],['Сессия',note.meta.native_session]]){
@@ -215,7 +235,8 @@ async function openNote(id){
       if(url){const a=el('a',value);a.href=url;a.target='_blank';a.rel='noopener noreferrer';dd.append(a)}else dd.textContent=String(value);$('metadata').append(dd);
     }
     $('obsidian').href='obsidian://open?vault=SecondBrain&file='+encodeURIComponent(note.path);
-    renderMarkdown(note.body);renderRelations(note);showProjectMetrics(note,selection);catalogSelected();
+    $('note-tags').replaceChildren(...(note.tags||[]).map(tag=>{const b=el('button','#'+tag);b.title='Все заметки с этим тегом';b.onclick=()=>searchTag(tag);return b}));
+    renderMarkdown(note.body);renderRelations(note);renderSimilar();showProjectMetrics(note,selection);catalogSelected();
     $('scope-local').disabled=false;$('scope-local').title='';
     if(scope==='local')showGraph(true);else{refreshLit();focusNode(id)}
   }catch(e){notify(e.message,true)}
@@ -235,6 +256,26 @@ function focusNode(id){
   const k=tourTimer?1.9:Math.max(graph.zoom(),1.6),ms=reduced?0:700,shift=innerWidth>760?210/k:0;
   graph.zoom(k,ms);graph.centerAt(node.x+shift,node.y,ms);
 }
+function renderSimilar(){
+  const box=$('similar'),section=$('similar-section');
+  if(!currentNote){section.hidden=true;return}
+  const mine=semantic.links.filter(l=>l.source===currentNote.id||l.target===currentNote.id);
+  section.hidden=false;box.replaceChildren();$('similar-count').textContent=mine.length||'';
+  if(!(semantic.spaces||[]).includes(currentNote.space)){box.append(el('p',`Смысловые связи ищутся в пространстве «${(semantic.spaces||[]).map(s=>s==='agent'?'агенты':'люди').join(', ')}». Изменить можно в настройках ⚙.`,'hint'));return}
+  if(!mine.length){box.append(el('p','Похожих заметок без явной связи не найдено.','hint'));return}
+  for(const link of mine){
+    const other=link.source===currentNote.id?link.target:link.source,item=el('div',undefined,'similar-item'),head=el('div',undefined,'similar-head');
+    head.style.setProperty('--dot',colorOf(other));
+    const open=el('button',titleOf(other));open.onclick=()=>openNote(other);open.onmouseenter=()=>{hover=shown.get(other)||null;refreshLit()};open.onmouseleave=()=>{hover=null;refreshLit()};
+    const score=el('span',`${Math.round(link.score*100)}%`,'similar-score');if(link.duplicate)score.append(el('span','возможный дубль','dup'));
+    head.append(open,score);item.append(head);
+    if(link.why){const details=el('details');details.append(el('summary','похожие фрагменты'));const [a,b]=link.source===currentNote.id?link.why:[link.why[1],link.why[0]];details.append(el('blockquote',a),el('blockquote',b));item.append(details)}
+    const actions=el('div',undefined,'similar-actions'),accept=el('button','Связать','pill primary'),reject=el('button','Скрыть','pill');
+    accept.onclick=()=>run(accept,async()=>{const id=currentNote.id;await api('brain/link',{source:id,target:other});await load();await openNote(id);notify('Связь добавлена в Markdown, предыдущая версия сохранена.')});
+    reject.onclick=()=>run(reject,async()=>{await api('brain/dismiss',{source:currentNote.id,target:other});await loadSemantic();notify('Предложение скрыто и больше не появится.')});
+    actions.append(accept,reject);item.append(actions);box.append(item);
+  }
+}
 function closeNote(){++request;selected=null;currentNote=null;hover=null;$('inspector').hidden=true;catalogSelected();history.replaceState(null,'',location.pathname);$('scope-local').disabled=true;$('scope-local').title='Сначала выберите заметку';if(scope==='local')setScope('all');else refreshLit()}
 function setScope(next){scope=next;for(const name of ['all','local']){$('scope-'+name).classList.toggle('active',scope===name);$('scope-'+name).setAttribute('aria-pressed',String(scope===name))}$('depth-group').hidden=scope!=='local';showGraph(true)}
 function setDepth(next){depth=next;for(const n of [1,2]){$('depth-'+n).classList.toggle('active',depth===n);$('depth-'+n).setAttribute('aria-pressed',String(depth===n))}showGraph(true)}
@@ -248,26 +289,51 @@ function stopTour(){if(!tourTimer)return;clearInterval(tourTimer);tourTimer=null
 $('tour').onclick=()=>tourTimer?stopTour():startTour();
 for(const type of ['pointerdown','wheel','keydown'])document.addEventListener(type,e=>{if(!$('tour').contains(e.target))stopTour()},{capture:true,passive:true});
 
+// Spaces: human notes and agent notes form separate graphs; «Всё» shows both.
+function setSpace(next){
+  if(next===space)return;space=next;stopTour();legendFocus=null;
+  for(const name of ['human','agent','all']){$('space-'+name).classList.toggle('active',space===name);$('space-'+name).setAttribute('aria-pressed',String(space===name))}
+  if(selected)closeNote();if(scope==='local')setScope('all');
+  if($('search').value.trim())search();load(true);
+}
+for(const name of ['human','agent','all'])$('space-'+name).onclick=()=>setSpace(name);
+
+// "#tag" in the search box filters by tag; anything else is full-text.
+const queryParams=q=>q.startsWith('#')?{tag:q.slice(1)}:{q};
+async function searchTag(tag){$('search').value='#'+tag;if(!drawerOpen())setDrawer(true);await search();hideResults()}
+
+// Search mode: BM25 stays the default; semantic and hybrid use the embedding settings.
+let searchMode='bm25';
+const MODE_LABELS={bm25:'BM25',semantic:'По смыслу',hybrid:'Гибрид'};
+function showSearchMode(){$('search-mode').textContent=MODE_LABELS[searchMode];$('search-mode').className='mode-pill '+searchMode;for(const b of document.querySelectorAll('.results-modes button'))b.setAttribute('aria-pressed',String(b.dataset.mode===searchMode))}
+async function setSearchMode(mode){searchMode=mode;showSearchMode();try{await api('settings',{search:{mode}})}catch(e){notify(e.message,true)}if($('search').value.trim())search()}
+$('search-mode').onclick=()=>setSearchMode({bm25:'semantic',semantic:'hybrid',hybrid:'bm25'}[searchMode]);
+for(const b of document.querySelectorAll('.results-modes button'))b.onmousedown=e=>{e.preventDefault();setSearchMode(b.dataset.mode)};
+const searchApi=(q,limit)=>q.startsWith('#')||searchMode==='bm25'
+  ?api('brain/notes?'+new URLSearchParams({...queryParams(q),limit,...spaceQuery()}))
+  :api('brain/search?'+new URLSearchParams({q,mode:searchMode,limit:Math.min(limit,50),...spaceQuery()}));
+
 // ── Command search: results list plus highlighted matches on the graph ────
 let searchTimer,searchSerial=0,results=[],active=-1;
 function renderResults(){
-  const box=$('results');box.replaceChildren();
+  const box=$('results-list');box.replaceChildren();showSearchMode();
   results.slice(0,8).forEach((note,i)=>{
     const b=el('button',undefined,'result');b.setAttribute('role','option');b.setAttribute('aria-selected',String(i===active));b.style.setProperty('--dot',colorOf(note.id));
     const excerpt=(note.excerpt||'').split('## Relations')[0].replace(/\[\[[0-9a-f]{32}\]\]/g,'').replace(/\s+/g,' ').trim();
-    b.append(el('strong',note.title),el('small',excerpt&&excerpt!=='…'?excerpt:`${labels[note.kind]} · ${reviewShort[note.review]}`));
+    const title=el('strong',note.title);if(searchMode==='semantic'&&note.score!==undefined)title.append(el('span',`≈ ${Math.round(note.score*100)}%`,'score'));
+    b.append(title,el('small',excerpt&&excerpt!=='…'?excerpt:`${labels[note.kind]} · ${reviewShort[note.review]}`));
     b.onmousedown=e=>{e.preventDefault();pick(note.id)};box.append(b);
   });
-  if(!results.length)box.append(el('p','Ничего не найдено. Попробуйте другое слово.','empty'));
-  box.hidden=false;$('search').setAttribute('aria-expanded','true');
+  if(!results.length)box.append(el('p',searchMode==='bm25'?'Ничего не найдено. Попробуйте другое слово или поиск по смыслу.':'Ничего не найдено.','empty'));
+  $('results').hidden=false;$('search').setAttribute('aria-expanded','true');
 }
 function hideResults(){$('results').hidden=true;$('search').setAttribute('aria-expanded','false')}
 function pick(id){hideResults();openNote(id)}
 async function search(){
   const q=$('search').value.trim(),serial=++searchSerial;
   if(drawerOpen())loadCatalog();
-  if(!q){results=[];searchMatches=null;hideResults();refreshLit();status();return}
-  try{const found=await api('brain/notes?'+new URLSearchParams({q,limit:500}));if(serial!==searchSerial)return;results=found.items;active=results.length?0:-1;searchMatches=new Set(results.map(n=>n.id));renderResults();refreshLit();status()}catch(e){notify(e.message,true)}
+  if(!q||q==='#'){results=[];searchMatches=null;hideResults();refreshLit();status();return}
+  try{const found=await searchApi(q,500);if(serial!==searchSerial)return;results=found.items;active=results.length?0:-1;searchMatches=new Set(results.map(n=>n.id));renderResults();refreshLit();status()}catch(e){notify(e.message,true)}
 }
 $('search').addEventListener('input',()=>{clearTimeout(searchTimer);searchTimer=setTimeout(search,180)});
 $('search').addEventListener('focus',()=>{if(results.length&&$('search').value.trim())renderResults()});
@@ -281,14 +347,32 @@ $('search').addEventListener('keydown',e=>{
 });
 document.addEventListener('keydown',e=>{
   if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='k'||e.key==='/'&&!/INPUT|TEXTAREA/.test(document.activeElement.tagName)){e.preventDefault();$('search').focus();$('search').select();return}
-  if(e.key==='Escape'&&!$('create-dialog').open&&!$('github-dialog').open&&$('editing').hidden&&document.activeElement!==$('search')){if(selected)closeNote();else if(drawerOpen())setDrawer(false)}
+  if(e.key==='Escape'&&!$('create-dialog').open&&!$('github-dialog').open&&!$('settings-dialog').open&&$('editing').hidden&&document.activeElement!==$('search')){if(chatOpen())setChat(false);else if(selected)closeNote();else if(drawerOpen())setDrawer(false)}
 });
 
 // ── Drawer: catalog of notes; follows the top search when it is active ────
-let catalogKind='',catalogNext=null,catalogSerial=0;
+let catalogKind='',catalogReview='',catalogNext=null,catalogSerial=0;
 const drawerOpen=()=>!$('drawer').hidden;
 function setDrawer(open){$('drawer').hidden=!open;$('drawer-toggle').setAttribute('aria-expanded',String(open));document.body.classList.toggle('drawer-open',open);if(open){renderKindFilter();loadCatalog()}}
+function renderReviewFilter(){
+  const counts={};for(const n of byId.values())counts[n.review]=(counts[n.review]||0)+1;
+  $('review-filter').replaceChildren();
+  for(const [review,label] of [['','Все статусы'],['unreviewed','Не проверено'],['proposed','Предложено'],['reviewed','Проверено']]){
+    const b=el('button',review?`${label} ${counts[review]||0}`:label,review);b.setAttribute('aria-pressed',String(catalogReview===review));
+    b.onclick=()=>{catalogReview=review;renderReviewFilter();loadCatalog()};$('review-filter').append(b);
+  }
+}
+let tagSerial=0;
+async function renderTagFilter(){
+  const serial=++tagSerial;
+  try{
+    const {tags}=await api('brain/tags?'+new URLSearchParams(spaceQuery()));if(serial!==tagSerial)return;
+    const current=$('search').value.trim().toLowerCase();$('tag-filter').replaceChildren();
+    for(const {tag,count} of tags.slice(0,12)){const b=el('button','#'+tag);b.append(el('small',String(count)));b.setAttribute('aria-pressed',String(current==='#'+tag));b.onclick=()=>current==='#'+tag?($('search').value='',search()):searchTag(tag);$('tag-filter').append(b)}
+  }catch{}
+}
 function renderKindFilter(){
+  renderReviewFilter();
   const counts={};for(const n of byId.values())counts[n.kind]=(counts[n.kind]||0)+1;
   $('kind-filter').replaceChildren();
   for(const kind of ['',...Object.keys(labels).filter(k=>counts[k])]){
@@ -298,9 +382,11 @@ function renderKindFilter(){
 }
 function catalogSelected(){for(const b of $('catalog').querySelectorAll('.catalog-item'))b.classList.toggle('selected',b.dataset.id===selected)}
 async function loadCatalog(append=false){
-  const serial=++catalogSerial,q=$('search').value.trim();
+  const serial=++catalogSerial,q=$('search').value.trim()==='#'?'':$('search').value.trim();
   try{
-    const result=await api('brain/notes?'+new URLSearchParams({q,kind:catalogKind,offset:append?catalogNext:0,limit:50}));if(serial!==catalogSerial)return;
+    const semanticList=q&&!q.startsWith('#')&&searchMode!=='bm25';
+    let result=semanticList?await searchApi(q,50):await api('brain/notes?'+new URLSearchParams({...queryParams(q),kind:catalogKind,review:catalogReview,offset:append?catalogNext:0,limit:50,...spaceQuery()}));if(serial!==catalogSerial)return;
+    if(semanticList){const items=result.items.filter(n=>(!catalogKind||n.kind===catalogKind)&&(!catalogReview||n.review===catalogReview));result={items,total:items.length,next:null}}
     if(!append)$('catalog').replaceChildren();
     for(const note of result.items){
       const b=el('button',undefined,'catalog-item');b.dataset.id=note.id;b.style.setProperty('--dot',colorOf(note.id));
@@ -308,11 +394,12 @@ async function loadCatalog(append=false){
       b.onclick=()=>openNote(note.id);b.onmouseenter=()=>{hover=shown.get(note.id)||null;refreshLit()};b.onmouseleave=()=>{hover=null;refreshLit()};
       $('catalog').append(b);
     }
-    if(!result.total)$('catalog').append(el('p',q?'По этому запросу заметок нет.':'Заметок этого типа пока нет.','hint'));
+    if(!result.total)$('catalog').append(el('p',q?'По этому запросу заметок нет.':'Заметок с такими фильтрами нет.','hint'));
     catalogNext=result.next;$('more').hidden=catalogNext===null;$('catalog-count').textContent=result.total;
-    $('catalog-query').hidden=!q;$('catalog-query').textContent=`Результаты поиска «${q}»`;catalogSelected();
+    $('catalog-query').hidden=!q;$('catalog-query').textContent=q.startsWith('#')?`Заметки с тегом ${q}`:`${MODE_LABELS[searchMode]}: «${q}»`;catalogSelected();renderTagFilter();
   }catch(e){notify(e.message,true)}
 }
+$('drawer-new').onclick=()=>$('create-dialog').showModal();
 $('drawer-toggle').onclick=()=>setDrawer(!drawerOpen());$('drawer-close').onclick=()=>setDrawer(false);
 $('more').onclick=()=>run($('more'),()=>loadCatalog(true));
 
@@ -329,6 +416,96 @@ $('github-form').onsubmit=async e=>{
   }catch(error){state.classList.add('error');state.textContent=error.message}
   finally{button.disabled=false}
 };
+
+// ── Settings: embedding endpoint and semantic suggestion parameters ──────
+const URL_HINTS={openai:'http://localhost:1234/v1 или https://api.openai.com/v1',ollama:'http://localhost:11434',tei:'http://localhost:8080'};
+function settingsStatus(text,error=false){$('settings-status').textContent=text;$('settings-status').classList.toggle('error',error)}
+function providerFields(){const p=$('set-provider').value;$('endpoint-fields').hidden=p==='local';$('set-url').placeholder=URL_HINTS[p]||'';$('set-model').placeholder=p==='tei'?'задаётся при запуске TEI':'bge-m3'}
+function thresholdLabel(){const auto=$('set-auto').checked;$('set-threshold').disabled=auto;$('threshold-value').textContent=auto?(semantic.auto&&semantic.threshold?`сейчас ${semantic.threshold.toFixed(2)}`:'авто'):Number($('set-threshold').value).toFixed(2)}
+function fillSettings(values){
+  const e=values.embeddings,s=values.semantic,f=$('settings-form');
+  f.provider.value=e.provider;f.url.value=e.url;f.model.value=e.model;f.document_prefix.value=e.document_prefix;f.query_prefix.value=e.query_prefix;f.api_key.value='';
+  const c=values.chat;f.chat_provider.value=c.provider;f.chat_url.value=c.url;f.chat_model.value=c.model;f.chat_notes.value=c.context_notes;f.chat_key.value='';
+  f.chat_key.placeholder=c.api_key_set?'Ключ сохранён — оставьте пустым, чтобы не менять':'Не нужен для Ollama';
+  for(const r of f.querySelectorAll('[name=search_mode]'))r.checked=r.value===values.search.mode;
+  f.api_key.placeholder=e.api_key_set?'Ключ сохранён — оставьте пустым, чтобы не менять':'Не нужен для локальных серверов';
+  for(const box of f.querySelectorAll('[name=space]'))box.checked=s.spaces.includes(box.value);
+  $('set-auto').checked=s.threshold==='auto';f.threshold.value=s.threshold==='auto'?(semantic.threshold||.5):s.threshold;f.top_k.value=s.top_k;providerFields();thresholdLabel();
+}
+function settingsPayload(){
+  const f=$('settings-form'),e={provider:f.provider.value,url:f.url.value,model:f.model.value,document_prefix:f.document_prefix.value,query_prefix:f.query_prefix.value};
+  if(f.api_key.value)e.api_key=f.api_key.value;
+  const chat={provider:f.chat_provider.value,url:f.chat_url.value,model:f.chat_model.value,context_notes:Number(f.chat_notes.value)};if(f.chat_key.value)chat.api_key=f.chat_key.value;
+  const mode=f.querySelector('[name=search_mode]:checked')?.value||searchMode;
+  return {embeddings:e,chat,search:{mode},semantic:{spaces:[...f.querySelectorAll('[name=space]:checked')].map(b=>b.value),threshold:$('set-auto').checked?'auto':Number(f.threshold.value),top_k:Number(f.top_k.value)}};
+}
+$('settings').onclick=async()=>{try{applySettings(await api('settings'));settingsStatus('');$('settings-dialog').showModal()}catch(e){notify(e.message,true)}};
+$('close-settings').onclick=()=>$('settings-dialog').close();$('set-provider').onchange=providerFields;$('set-threshold').oninput=thresholdLabel;$('set-auto').onchange=thresholdLabel;
+$('settings-test').onclick=()=>run($('settings-test'),async()=>{settingsStatus('Сохраняю и запрашиваю тестовый вектор…');try{applySettings(await api('settings',settingsPayload()));const r=await api('settings/test',{});settingsStatus(`Работает: ${r.provider}${r.model?' · '+r.model:''} · размерность ${r.dims}`)}catch(e){settingsStatus(e.message,true)}});
+$('settings-form').onsubmit=e=>{e.preventDefault();const button=$('settings-form').querySelector('[type=submit]');run(button,async()=>{try{applySettings(await api('settings',settingsPayload()));settingsStatus('Сохранено. Считаю смысловые связи…');await loadSemantic();$('settings-dialog').close();notify(`Смысловые связи пересчитаны: ${semantic.links.length} предложений`+(semantic.fetched?`, запрошено векторов: ${semantic.fetched}`:'')+'.')}catch(err){settingsStatus(err.message,true)}})};
+$('chat-test').onclick=()=>run($('chat-test'),async()=>{settingsStatus('Сохраняю и спрашиваю модель…');try{applySettings(await api('settings',settingsPayload()));const r=await api('settings/test-chat',{});settingsStatus(`Чат работает: ${r.model} ответила «${r.reply}»`)}catch(e){settingsStatus(e.message,true)}});
+function applySettings(values){fillSettings(values);searchMode=values.search.mode;chatConfigured=!!values.chat.url;$('chat-model').textContent=chatConfigured?`${values.chat.model} · ответы только по вашим заметкам`:'Модель не подключена';showSearchMode();if(chatOpen())renderChat()}
+$('semantic-toggle').onclick=()=>{semanticOn=!semanticOn;$('semantic-toggle').setAttribute('aria-pressed',String(semanticOn));showGraph()};
+
+// ── Chat with the knowledge base ──────────────────────────────────────────
+let chatMessages=[],chatBusy=false,chatConfigured=false;
+const chatOpen=()=>!$('chat').hidden;
+function setChat(open){$('chat').hidden=!open;$('chat-toggle').setAttribute('aria-expanded',String(open));document.body.classList.toggle('chat-open',open);if(open){renderChat();$('chat-input').focus()}}
+function chatEmpty(){
+  const box=el('div',undefined,'chat-empty');
+  if(!chatConfigured){box.append(el('p','Чтобы общаться с LLM, укажите модель в настройках: например, Ollama с qwen3 или любой OpenAI-совместимый сервер.'));const b=el('button','Открыть настройки ⚙');b.onclick=()=>$('settings').click();box.append(b);return box}
+  box.append(el('p','Спросите что-нибудь — ответ будет построен по вашим заметкам со ссылками на них.'));
+  for(const example of ['Как мы защищаемся от того, что агент выдумывает факты?','Какие решения приняты по хранению данных?','Что мешает новой команде начать пользоваться?']){const b=el('button',example);b.onclick=()=>{$('chat-input').value=example;sendChat()};box.append(b)}
+  return box;
+}
+function renderAnswer(message){
+  const box=el('div',undefined,'msg bot'),byNumber=new Map((message.sources||[]).map(s=>[s.n,s]));
+  const cite=n=>{const source=byNumber.get(n);if(!source)return null;const b=el('button',String(n),'cite');b.title=source.title;b.onclick=()=>citeOpen(source.id);b.onmouseenter=()=>{hover=shown.get(source.id)||null;refreshLit()};b.onmouseleave=()=>{hover=null;refreshLit()};return b};
+  for(const block of parse(message.content)){
+    if(block.type==='code'){const pre=el('pre');pre.append(el('code',block.text));box.append(pre)}
+    else if(block.type==='ul'||block.type==='ol'){const list=el(block.type);if(block.start>1)list.start=block.start;for(const item of block.items){const li=el('li');li.append(renderInline(item,cite));list.append(li)}box.append(list)}
+    else{const node=el(block.type==='h'?'h4':'p');node.append(renderInline(block.inline,cite));box.append(node)}
+  }
+  const cited=(message.sources||[]).filter(s=>s.cited),other=(message.sources||[]).filter(s=>!s.cited);
+  const sourceButton=s=>{const b=el('button',undefined,'source');b.append(el('b',`[${s.n}]`),el('span',s.title),el('small',reviewShort[s.review],s.review));b.onclick=()=>citeOpen(s.id);return b};
+  if(message.sources?.length){
+    const list=el('div',undefined,'sources');cited.forEach(s=>list.append(sourceButton(s)));
+    if(other.length){const more=el('details');more.append(el('summary',cited.length?`ещё найдено: ${other.length}`:`найдено заметок: ${other.length}, в ответе не процитированы`));other.forEach(s=>more.append(sourceButton(s)));list.append(more)}
+    box.append(list);
+  }
+  const actions=el('div',undefined,'msg-actions'),save=el('button','Сохранить как черновик','pill');
+  save.title='Ответ модели станет заметкой «предложено» в пространстве агентов со связями на процитированные заметки';
+  save.onclick=()=>run(save,async()=>{const question=message.question||'';const result=await api('brain/create',{title:('Ответ: '+question).slice(0,190),body:`Вопрос: ${question}\n\n${message.content}`,kind:'note',origin:'chat',links:cited.map(s=>s.id),tags:['chat']});save.textContent='Сохранено';save.disabled=true;await load();notify('Ответ сохранён черновиком в пространство агентов.');void result});
+  actions.append(save);box.append(actions);
+  return box;
+}
+function citeOpen(id){setChat(false);openNote(id)}
+function renderChat(){
+  const log=$('chat-log');log.replaceChildren();
+  if(!chatMessages.length)log.append(chatEmpty());
+  for(const message of chatMessages){
+    if(message.role==='user')log.append(el('div',message.content,'msg user'));
+    else if(message.error)log.append(el('div',message.content,'msg error'));
+    else log.append(renderAnswer(message));
+  }
+  if(chatBusy)log.append(el('div','Ищу подходящие заметки и спрашиваю модель','msg thinking'));
+  log.scrollTop=log.scrollHeight;
+}
+async function sendChat(){
+  const text=$('chat-input').value.trim();if(!text||chatBusy)return;
+  chatMessages.push({role:'user',content:text});$('chat-input').value='';chatBusy=true;renderChat();
+  try{
+    const history=chatMessages.filter(m=>!m.error).map(m=>({role:m.role,content:m.content})).slice(-12);
+    const result=await api('brain/chat',{messages:history,space:space==='all'?'':space});
+    chatMessages.push({role:'assistant',content:result.answer,sources:result.sources,question:text});
+    pollBrainActivity();
+  }catch(e){chatMessages.push({role:'assistant',content:'Не получилось ответить: '+e.message,error:true})}
+  finally{chatBusy=false;renderChat()}
+}
+$('chat-toggle').onclick=()=>setChat(!chatOpen());$('chat-close').onclick=()=>setChat(false);
+$('chat-clear').onclick=()=>{chatMessages=[];renderChat()};
+$('chat-form').onsubmit=e=>{e.preventDefault();sendChat()};
+$('chat-input').addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendChat()}});
 
 // ── Agent Control extension ──────────────────────────────────────────────
 let activityCursor=null,activityBusy=false,activityFeed=[],callTargets=new Map();
@@ -372,6 +549,104 @@ async function pollActivity(){
   finally{activityBusy=false}
 }
 
+// ── Live agent activity: a cursor per agent walks the graph to the notes it touches ──
+const AGENT_COLORS=['#8ee07a','#7dd3fc','#f2c14e','#e879c9','#a98bff','#f28b40','#4fd1c5'];
+const agents=new Map();let graphAdj=new Map(),animUntil=0,animTimer;
+const ACTIONS={'memory.search':'ищет','memory.read':'читает','memory.traverse':'обходит связи','memory.draft':'пишет черновик','chat.answer':'отвечает по заметкам'};
+function keepAnimating(ms){
+  if(!graph)return;animUntil=Math.max(animUntil,performance.now()+ms);graph.autoPauseRedraw(false);clearTimeout(animTimer);
+  animTimer=setTimeout(function check(){if([...agents.values()].some(a=>a.queue.length)||performance.now()<animUntil){animTimer=setTimeout(check,400);return}graph.autoPauseRedraw(reduced||shown.size>300);redraw()},ms+60);
+}
+function pulse(id,color,dur=FLASH_MS){if(shown.has(id))flashes.set(id,{until:performance.now()+dur,color,dur})}
+function agentFor(actor){let agent=agents.get(actor);if(!agent){agent={actor,color:AGENT_COLORS[agents.size%AGENT_COLORS.length],queue:[],node:null,pos:null,trail:[],action:'',seen:0,alpha:0};agents.set(actor,agent)}return agent}
+function linkBetween(a,b){return graph?.graphData().links.find(l=>!l.semantic&&((endId(l.source)===a&&endId(l.target)===b)||(endId(l.source)===b&&endId(l.target)===a)))}
+// Walk along explicit links (shortest path) when there is one; otherwise fly straight.
+function walk(agent,target,action){
+  if(!shown.has(target))return;
+  const from=agent.queue.length?agent.queue[agent.queue.length-1].to:agent.node;
+  const path=from&&shown.has(from)?shortestPath(graphAdj,from,target,id=>shown.has(id))||[from,target]:[target];
+  if(path.length===1)agent.queue.push({to:target,dur:650,action,final:true});
+  for(let i=1;i<path.length;i++)agent.queue.push({from:path[i-1],to:path[i],dur:path.length>2?330:650,action,final:i===path.length-1});
+  keepAnimating(4000);
+}
+function fan(agent,center,ids,action){if(!shown.has(center))return;walk(agent,center,action);agent.queue.push({to:center,dur:900,fan:ids.filter(id=>shown.has(id)),action,final:true});keepAnimating(5000)}
+function stepAgent(agent,now){
+  const seg=agent.queue[0],target=seg&&shown.get(seg.to);if(!seg)return;
+  if(!target||!Number.isFinite(target.x)){agent.queue.shift();return}
+  if(!seg.start){
+    seg.start=now;seg.origin=agent.pos?{...agent.pos}:null;agent.action=seg.action;
+    const link=seg.from&&linkBetween(seg.from,seg.to);if(link&&!reduced)graph.emitParticle(link);
+    for(const id of seg.fan||[]){const spoke=linkBetween(seg.to,id);if(spoke&&!reduced)graph.emitParticle(spoke);pulse(id,agent.color,1800)}
+  }
+  const t=Math.min(1,reduced?1:(now-seg.start)/seg.dur),e=t<.5?2*t*t:1-(-2*t+2)**2/2,o=seg.origin||target;
+  agent.pos={x:o.x+(target.x-o.x)*e,y:o.y+(target.y-o.y)*e};agent.seen=now;
+  if(t>=1){agent.node=seg.to;agent.queue.shift();pulse(seg.to,agent.color,seg.final?2400:900)}
+}
+function drawAgents(ctx,scale){
+  const now=performance.now();
+  for(const agent of agents.values()){
+    stepAgent(agent,now);
+    agent.alpha=agent.pos?Math.max(0,1-Math.max(0,now-agent.seen-6000)/4000):0;
+    if(!agent.alpha){agent.trail=[];continue}
+    const {x,y}=agent.pos;agent.trail.push({x,y});if(agent.trail.length>24)agent.trail.shift();
+    ctx.save();ctx.globalCompositeOperation='lighter';ctx.strokeStyle=agent.color;ctx.lineCap='round';
+    for(let i=1;i<agent.trail.length;i++){const a=agent.trail[i-1],b=agent.trail[i],k=i/agent.trail.length;ctx.globalAlpha=agent.alpha*k*.85;ctx.lineWidth=(1+4*k)/scale;ctx.beginPath();ctx.moveTo(a.x,a.y);ctx.lineTo(b.x,b.y);ctx.stroke()}
+    const r=18/scale,g=ctx.createRadialGradient(x,y,0,x,y,r);g.addColorStop(0,rgba(agent.color,.95*agent.alpha));g.addColorStop(.3,rgba(agent.color,.4*agent.alpha));g.addColorStop(1,rgba(agent.color,0));
+    ctx.globalAlpha=1;ctx.fillStyle=g;ctx.beginPath();ctx.arc(x,y,r,0,TAU);ctx.fill();
+    ctx.globalCompositeOperation='source-over';ctx.globalAlpha=agent.alpha;ctx.fillStyle='#fff';ctx.beginPath();ctx.arc(x,y,3.2/scale,0,TAU);ctx.fill();
+    ctx.restore();
+  }
+}
+function drawAgentTags(ctx){
+  for(const agent of agents.values()){
+    if(!agent.alpha||!agent.pos)continue;
+    const p=graph.graph2ScreenCoords(agent.pos.x,agent.pos.y),text=`${agent.actor} · ${agent.action}`.slice(0,60);
+    ctx.font='600 11px Inter,"Segoe UI",system-ui,sans-serif';const w=ctx.measureText(text).width,x=p.x+14,y=p.y-24;
+    ctx.globalAlpha=agent.alpha;ctx.fillStyle='rgba(10,12,16,.88)';ctx.strokeStyle=agent.color;ctx.lineWidth=1;
+    ctx.beginPath();ctx.roundRect(x-8,y-10,w+16,20,10);ctx.fill();ctx.stroke();ctx.fillStyle=agent.color;ctx.fillText(text,x,y);
+  }
+}
+function postFrame(ctx,scale){drawAgents(ctx,scale);drawLabels(ctx,scale)}
+function animateEvent(item){
+  const agent=agentFor(item.actor),[first,...rest]=item.ids;
+  if(item.type==='memory.search'){
+    item.ids.forEach((id,i)=>setTimeout(()=>{pulse(id,agent.color,1700);keepAnimating(2000)},reduced?0:i*120));
+    if(first)walk(agent,first,`ищет «${item.query.slice(0,40)}»`);
+  }else if(item.type==='memory.read'&&first)walk(agent,first,'читает');
+  else if(item.type==='memory.traverse'&&first)fan(agent,first,rest,'обходит связи');
+  else if(item.type==='chat.answer')item.ids.forEach(id=>walk(agent,id,'цитирует'));
+  else if(item.type==='memory.draft'&&first){
+    if(rest[0])walk(agent,rest[0],'собирает черновик');
+    load().then(()=>fan(agent,first,rest,'пишет черновик'));
+  }
+}
+let brainCursor=null,brainFeed=[],brainBusy=false;
+function renderBrainFeed(){
+  if(extension.connected)return;
+  const panel=$('activity-panel'),recent=brainFeed.filter(i=>Date.now()/1000-i.ts<60).length;
+  panel.hidden=!brainFeed.length;$('activity-feed').replaceChildren();
+  panel.querySelector('.activity-heading span').textContent='Обращения агентов';
+  $('activity-state').textContent=recent?`${recent} за минуту`:'тихо';
+  for(const item of brainFeed.slice(0,6)){
+    const row=el('div',undefined,'activity-row live-row'),agent=agentFor(item.actor),subject=item.type==='memory.search'?`«${item.query}» → ${item.ids.length}`:titleOf(item.ids[0]||'');
+    row.style.setProperty('--dot',agent.color);
+    row.append(el('time',new Date(item.ts*1000).toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit',second:'2-digit'})),el('span',`${item.actor} ${ACTIONS[item.type]||item.type} ${subject}`));
+    row.title=row.lastChild.textContent;if(item.ids[0]&&item.type!=='memory.search')row.onclick=()=>openNote(item.ids[0]);
+    $('activity-feed').append(row);
+  }
+  if(recent)connection(`агенты работают · ${recent} обращений за минуту`);else if(!extension.connected)connection('Локально · без сети');
+}
+async function pollBrainActivity(){
+  if(brainBusy)return;brainBusy=true;
+  try{
+    const result=await api('brain/activity'+(brainCursor===null?'':'?after='+brainCursor));
+    for(const [id,title] of Object.entries(result.titles||{}))knownTitles.set(id,title);
+    brainCursor=result.cursor;
+    for(const item of result.items){brainFeed.unshift(item);if(item.live)animateEvent(item)}
+    brainFeed=brainFeed.slice(0,40);if(result.items.length||result.initial)renderBrainFeed();
+  }catch{}finally{brainBusy=false}
+}
+
 // ── Actions ───────────────────────────────────────────────────────────────
 $('sync').onclick=()=>run($('sync'),async()=>{const result=await api('brain/sync',{});await load();notify(`Обновлено: ${result.notes} заметок, ${result.links} связей.`+(result.warning_count?` Замечаний к связям: ${result.warning_count}.`:''))});
 $('backup').onclick=()=>run($('backup'),async()=>{const result=await api('brain/backup',{});notify('Копия Markdown и версий сохранена: '+result.path)});
@@ -379,16 +654,18 @@ $('close-note').onclick=closeNote;$('focus-local').onclick=()=>setScope('local')
 $('edit').onclick=()=>{$('editor').value=currentNote.content;$('content').hidden=true;$('editing').hidden=false;$('editor').focus()};$('cancel-edit').onclick=()=>{$('editing').hidden=true;$('content').hidden=false};
 $('save').onclick=()=>run($('save'),async()=>{const note=await api('brain/edit',{id:currentNote.id,content:$('editor').value,hash:currentNote.hash});await load();await openNote(note.id);notify('Изменения сохранены. Предыдущая версия оставлена в vault.')});
 $('new-note').onclick=()=>$('create-dialog').showModal();$('close-dialog').onclick=()=>$('create-dialog').close();
-$('create-form').onsubmit=e=>{e.preventDefault();const button=e.target.querySelector('[type=submit]');run(button,async()=>{const result=await api('brain/create',Object.fromEntries(new FormData(e.target)));$('create-dialog').close();e.target.reset();await load();await openNote(result.id);notify('Заметка создана со статусом «Предложено».')})};
+$('create-form').onsubmit=e=>{e.preventDefault();const button=e.target.querySelector('[type=submit]');run(button,async()=>{const form=Object.fromEntries(new FormData(e.target));form.tags=form.tags.split(/[,\s]+/).map(t=>t.replace(/^#/,'')).filter(Boolean);const result=await api('brain/create',form);$('create-dialog').close();e.target.reset();await load();await openNote(result.id);notify('Заметка создана со статусом «Предложено».')})};
 $('color-cluster').onclick=()=>setColorMode('cluster');$('color-kind').onclick=()=>setColorMode('kind');
 $('scope-all').onclick=()=>setScope('all');$('scope-local').onclick=()=>setScope('local');$('depth-1').onclick=()=>setDepth(1);$('depth-2').onclick=()=>setDepth(2);
 $('fit').onclick=()=>fit();
 
 initializeGraph();
 extension=await api('extension').catch(()=>({connected:false}));applyExtension();
-await load(true);await pollActivity();
+await api('settings').then(applySettings).catch(()=>{});
+await load(true);await pollActivity();await pollBrainActivity();
 const initial=new URLSearchParams(location.hash.slice(1)).get('note');if(initial)openNote(initial);
 setInterval(()=>{if(!document.hidden)pollActivity()},1800);
+setInterval(()=>{if(!document.hidden)pollBrainActivity()},1200);
 
 async function showProjectMetrics(note,selection){
   $('project-checkpoint').hidden=note.kind!=='project'||!extension.connected;if(note.kind!=='project'||!extension.connected)return;

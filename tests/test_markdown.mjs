@@ -18,4 +18,6 @@ test('blocks: headings, lists, paragraphs and fences', () => {
   assert.equal(blocks[2].items.length, 2);
   assert.equal(blocks[4].text, '[[not a link]]');
   assert.deepEqual(blocks[5].inline, [{t: 'text', v: '<script>x</script>'}]);
+  assert.equal(blocks[3].start, 1);
+  assert.deepEqual(parse('1. a\n\nтекст\n\n2. b').map(b => b.start), [1, undefined, 2]);
 });

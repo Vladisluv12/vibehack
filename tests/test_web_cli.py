@@ -8,6 +8,7 @@ import threading
 import unittest
 from unittest import mock
 import urllib.error
+import urllib.parse
 import urllib.request
 
 from second_brain.cli import main
@@ -43,6 +44,63 @@ class WebCliTests(unittest.TestCase):
         self.assertGreaterEqual(report['notes'], 60)
         self.assertGreater(report['links'], report['notes'])
         self.assertEqual(report['warning_count'], 0)
+
+    def test_settings_and_semantic_endpoints(self):
+        self.cli('demo', '--showcase')
+        server = make_server(self.vault, self.state, 0)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        try:
+            base = f'http://127.0.0.1:{server.server_port}'
+            token = re.search(r'name="control-token" content="([^"]+)"', urllib.request.urlopen(base+'/').read().decode())[1]
+
+            def call(path, body=None):
+                request = urllib.request.Request(base+path, data=json.dumps(body).encode() if body is not None else None,
+                                                 headers={'X-Control-Token': token})
+                return json.loads(urllib.request.urlopen(request).read())
+
+            with self.assertRaises(urllib.error.HTTPError) as denied:
+                urllib.request.urlopen(base+'/api/settings')
+            self.assertEqual(denied.exception.code, 403)
+            denied.exception.close()
+            self.assertEqual(call('/api/settings')['embeddings']['provider'], 'local')
+            saved = call('/api/settings', {'embeddings': {'api_key': 'sk-do-not-leak-123'}})
+            self.assertTrue(saved['embeddings']['api_key_set'])
+            self.assertNotIn('sk-do-not-leak-123', json.dumps(call('/api/settings')))
+            self.assertEqual(call('/api/settings/test', {})['provider'], 'local')
+            semantic = call('/api/brain/semantic')
+            self.assertGreater(len(semantic['links']), 5)
+            first = semantic['links'][0]
+            call('/api/brain/link', {'source': first['source'], 'target': first['target']})
+            second = semantic['links'][1]
+            call('/api/brain/dismiss', {'source': second['source'], 'target': second['target']})
+            remaining = {frozenset((l['source'], l['target'])) for l in call('/api/brain/semantic')['links']}
+            self.assertNotIn(frozenset((first['source'], first['target'])), remaining)
+            self.assertNotIn(frozenset((second['source'], second['target'])), remaining)
+            found = call('/api/brain/search?' + urllib.parse.urlencode({'q': 'резервное копирование заметок', 'mode': 'semantic', 'space': 'human'}))
+            self.assertEqual(found['mode'], 'semantic')
+            self.assertTrue(found['items'] and all(i['space'] == 'human' for i in found['items']))
+            self.assertEqual(call('/api/brain/search?' + urllib.parse.urlencode({'q': 'резервное копирование', 'mode': 'bm25'}))['items'], [])
+            saved_answer = call('/api/brain/create', {'title': 'Ответ: тест', 'body': 'Ответ модели [1]', 'origin': 'chat',
+                                                      'links': [first['source']], 'tags': ['chat']})
+            note = call('/api/brain/note?id=' + saved_answer['id'])
+            self.assertEqual((note['space'], note['review'], note['tags']), ('agent', 'proposed', ['chat']))
+            self.assertEqual([r['target'] for r in note['relations']], [first['source']])
+            from second_brain.tools import Tools
+            Tools(self.vault, self.state, 'claude-code').get_document(first['source'])
+            feed = call('/api/brain/activity?after=0')
+            self.assertEqual(feed['items'][-1]['actor'], 'claude-code')
+            self.assertIn(first['source'], feed['titles'])
+            with self.assertRaises(urllib.error.HTTPError) as bad_links:
+                call('/api/brain/create', {'title': 'x', 'body': 'y', 'links': ['../../etc']})
+            self.assertEqual(bad_links.exception.code, 400)
+            bad_links.exception.close()
+            with self.assertRaises(urllib.error.HTTPError) as bad:
+                call('/api/settings', {'embeddings': {'provider': 'openai', 'url': 'ftp://x', 'model': 'm'}})
+            self.assertEqual(bad.exception.code, 400)
+            bad.exception.close()
+        finally:
+            server.shutdown()
+            server.server_close()
 
     def test_server_requires_token_and_serves_brain_only(self):
         self.cli('demo')

@@ -64,7 +64,7 @@ def skill_pack(brain, learning, *, tier, task, run_id, k=3, budget_chars=4000, i
     task_words = scope_words(task)
     parts, canaries, offset = [], [], 0
     while len(parts) < k:
-        page = brain.list(query, offset=offset, limit=100, any_terms=True)
+        page = brain.list(query, offset=offset, limit=100, match_any=True)
         for item in page['items']:
             note = brain.get(item['id'])
             meta = note['meta']

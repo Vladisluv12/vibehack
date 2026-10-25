@@ -7,8 +7,12 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit, parse_qs
 
-from .brain import Brain
+from .brain import ID, MAX_TAGS, Brain, normalise_tag
+from .activity import safe_record, since
+from .chat import answer as chat_answer
+from .embeddings import chat_complete, load_settings, public_settings, update_settings
 from .github import import_github
+from .semantic import Semantic, test_connection
 from .redact import redact
 
 HERE = Path(__file__).parent
@@ -41,6 +45,8 @@ def make_server(vault, state, port=8765, extension=None, open_brain=None):
     pages = {path: text.replace("__CONTROL_TOKEN__", token) for path, text in (extension.pages if extension else {}).items()}
     status = {'connected': bool(extension), 'name': extension.name if extension else '',
               **(extension.info() if extension else {})}
+
+    state_dir = Path(state).expanduser()
 
     def brain():
         if open_brain:
@@ -92,6 +98,11 @@ def make_server(vault, state, port=8765, extension=None, open_brain=None):
                 return self.send(200, pages[url.path], "text/html")
             if url.path == '/api/extension':
                 return self.send(200, status)
+            if url.path == '/api/settings':
+                try:
+                    return self.send(200, public_settings(load_settings(state_dir)))
+                except ValueError as exc:
+                    return self.send(400, {'error': str(exc)})
             if not url.path.startswith('/api/brain/'):
                 return self.extend('get', url.path, parse_qs(url.query))
             b = brain()
@@ -100,11 +111,33 @@ def make_server(vault, state, port=8765, extension=None, open_brain=None):
                 action = url.path.rsplit('/', 1)[1]
                 if action == 'notes':
                     result = b.list(params.get('q', [''])[0], params.get('kind', [''])[0],
-                                    int(params.get('offset', [0])[0]), int(params.get('limit', [50])[0]))
+                                    int(params.get('offset', [0])[0]), int(params.get('limit', [50])[0]),
+                                    params.get('space', [''])[0], params.get('review', [''])[0], params.get('tag', [''])[0])
                 elif action == 'note':
                     result = b.get(params.get('id', [''])[0])
                 elif action == 'graph':
-                    result = b.graph(params.get('q', [''])[0], params.get('kind', [''])[0])
+                    result = b.graph(params.get('q', [''])[0], params.get('kind', [''])[0], space=params.get('space', [''])[0])
+                elif action == 'activity':
+                    after = params.get('after', [None])[0]
+                    result = since(state_dir, int(after) if after not in (None, '') else None)
+                    ids = {i for item in result['items'] for i in item['ids']}
+                    result['titles'] = {r[0]: r[1] for r in b.db.execute(
+                        f"SELECT id,title FROM notes WHERE id IN ({','.join('?' * len(ids))})", tuple(ids))} if ids else {}
+                elif action == 'tags':
+                    result = b.tags(params.get('space', [''])[0])
+                elif action == 'search':
+                    semantic = Semantic(b, state_dir)
+                    try:
+                        result = semantic.search(params.get('q', [''])[0], params.get('mode', ['bm25'])[0], load_settings(state_dir),
+                                                 params.get('space', [''])[0], min(50, max(1, int(params.get('limit', [20])[0]))))
+                    finally:
+                        semantic.close()
+                elif action == 'semantic':
+                    semantic = Semantic(b, state_dir)
+                    try:
+                        result = semantic.suggestions(load_settings(state_dir))
+                    finally:
+                        semantic.close()
                 else:
                     return self.send(404, {'error': 'Not found'})
                 return self.send(200, result)
@@ -134,6 +167,18 @@ def make_server(vault, state, port=8765, extension=None, open_brain=None):
         def do_POST(self):
             if not self.check():
                 return
+            if self.path in ('/api/settings', '/api/settings/test', '/api/settings/test-chat'):
+                try:
+                    data = self.body(20_000)
+                    if self.path == '/api/settings':
+                        return self.send(200, public_settings(update_settings(state_dir, data)))
+                    settings = load_settings(state_dir)
+                    if self.path == '/api/settings/test-chat':
+                        reply = chat_complete([{'role': 'user', 'content': 'Ответь одним словом: связь есть?'}], settings['chat'])
+                        return self.send(200, {'model': settings['chat']['model'], 'reply': reply[:200]})
+                    return self.send(200, test_connection(settings))
+                except (ValueError, TypeError, OSError) as exc:
+                    return self.send(400, {'error': redact(str(exc))})
             if not self.path.startswith('/api/brain/'):
                 if not extension:
                     return self.send(404, {'error': 'Not found'})
@@ -155,8 +200,36 @@ def make_server(vault, state, port=8765, extension=None, open_brain=None):
                 elif action == 'import-github':
                     result = import_github(b, data['url'])
                     b.sync()
+                elif action == 'chat':
+                    semantic = Semantic(b, state_dir)
+                    try:
+                        result = chat_answer(b, semantic, load_settings(state_dir), data.get('messages'), data.get('space') or '')
+                    finally:
+                        semantic.close()
+                    question = data['messages'][-1]['content']
+                    safe_record(state_dir, 'chat', 'memory.search', [s['id'] for s in result['sources']], question)
+                    safe_record(state_dir, 'chat', 'chat.answer', [s['id'] for s in result['sources'] if s['cited']], question)
+                elif action == 'link':
+                    result = b.add_link(data['source'], data['target'])
+                elif action == 'dismiss':
+                    semantic = Semantic(b, state_dir)
+                    try:
+                        result = semantic.dismiss(data['source'], data['target'])
+                    finally:
+                        semantic.close()
                 elif action == 'create':
-                    ident = b.create(data['title'], data['body'], kind=data.get('kind', 'note'), review='proposed')
+                    tags = data.get('tags') or []
+                    if not isinstance(tags, list) or len(tags) > MAX_TAGS or any(normalise_tag(t) is None for t in tags):
+                        raise ValueError('Tags must be words like "поиск" or "project/alpha"')
+                    links = data.get('links') or []
+                    if not isinstance(links, list) or len(links) > 30 or any(not isinstance(i, str) or not ID.fullmatch(i) for i in links):
+                        raise ValueError('Invalid links')
+                    for ident in links:
+                        b.get(ident)
+                    # A saved chat answer is model output: it lands in the agent space for review.
+                    source = 'agent:chat' if data.get('origin') == 'chat' else ''
+                    ident = b.create(data['title'], data['body'], kind=data.get('kind', 'note'), review='proposed', source=source,
+                                     links=links, extra={'tags': sorted({normalise_tag(t) for t in tags})} if tags else None)
                     b.sync()
                     result = {'id': ident}
                 else:

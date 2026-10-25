@@ -46,7 +46,7 @@ def _existing_skills(brain, task):
         return []
     skills, offset = [], 0
     while True:
-        page = brain.list(query, offset=offset, limit=100, any_terms=True)
+        page = brain.list(query, offset=offset, limit=100, match_any=True)
         for item in page['items']:
             note = brain.get(item['id'])
             meta = note['meta']

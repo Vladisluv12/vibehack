@@ -9,6 +9,7 @@ from .brain import Brain, restore_backup
 from .github import import_github
 from .learning import MECHANISMS, TIERS, Learning
 from . import learning_cli
+from .tools import NAMES as TOOL_NAMES
 
 DEMO = Path(__file__).resolve().parent.parent / 'examples' / 'demo-vault'
 SHOWCASE = DEMO.parent / 'showcase-vault'
@@ -36,8 +37,13 @@ def parser():
     g = c.add_mutually_exclusive_group(); g.add_argument('--on', action='store_true'); g.add_argument('--off', action='store_true')
     c.add_argument('--reason', default='')
     learning_cli.add_commands(cmds)
-    c = cmds.add_parser('mcp', help='STDIO MCP gateway (requires fastmcp)')
-    c.add_argument('--agent-model', default='', help='Model id of the connecting agent; tier comes from state/agents.json')
+    model_help = 'Model id of the agent; its tier comes from state/agents.json (default: --agent)'
+    c = cmds.add_parser('mcp', help='STDIO MCP gateway (requires fastmcp)'); c.add_argument('--agent', default=None, help='Name shown in the panel (default: $SECOND_BRAIN_AGENT or mcp-agent)')
+    c.add_argument('--agent-model', default='', help=model_help)
+    c = cmds.add_parser('tool', help='Call an agent tool without MCP; it shows up live in the panel')
+    c.add_argument('name', choices=TOOL_NAMES)
+    c.add_argument('--args', default='{}', help='JSON object with the tool arguments'); c.add_argument('--agent', default=None)
+    c.add_argument('--agent-model', default='', help=model_help)
     return p
 
 
@@ -67,7 +73,14 @@ def _main(argv=None):
         return
     if args.cmd == 'mcp':
         from .mcp_server import run
-        return run(args.vault, args.state, args.agent_model)
+        return run(args.vault, args.state, args.agent, args.agent_model)
+    if args.cmd == 'tool':
+        from .tools import Tools
+        kwargs = json.loads(args.args)
+        if not isinstance(kwargs, dict):
+            raise SystemExit('--args must be a JSON object')
+        return print(json.dumps(getattr(Tools(args.vault, args.state, args.agent, args.agent_model), args.name)(**kwargs),
+                                ensure_ascii=False, indent=2))
     if args.cmd == 'mechanism':
         learning = Learning(args.state)
         try:

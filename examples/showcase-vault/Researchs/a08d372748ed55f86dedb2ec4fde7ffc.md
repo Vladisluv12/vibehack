@@ -7,6 +7,7 @@ review: "reviewed"
 created: "2026-07-06T07:00:00Z"
 source: ""
 source_hash: ""
+tags: ["ядро"]
 ---
 
 Сравнили Markdown, JSON и базу данных. Markdown выигрывает по читаемости, переносимости и diff в git.
