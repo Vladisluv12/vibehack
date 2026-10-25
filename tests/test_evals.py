@@ -542,7 +542,7 @@ class EvalTests(unittest.TestCase):
         captured = []
         batch = run_batch(self.tasks, config='C', tier='weak', agent_model='fake',
                           agent_argv=AGENT + ['--mode', 'slow'], learning=self.learning,
-                          timeout=0.3, after_run=lambda task, result: captured.append(result))
+                          timeout=0.3, check_timeout=60, after_run=lambda task, result: captured.append(result))
         self.assertEqual(metrics(self.learning, batch)['success_rate'], 0)
         self.assertTrue(captured[0]['agent']['timed_out'])
         self.assertEqual(captured[0]['check']['returncode'], 1)

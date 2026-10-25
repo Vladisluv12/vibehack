@@ -239,7 +239,7 @@ def _tokens(stdout):
 
 
 def run_batch(tasks, *, config, tier, agent_model, agent_argv, learning, skill_pack=None,
-              after_run=None, timeout=600) -> str:
+              after_run=None, timeout=600, check_timeout=None) -> str:
     """Run loaded, locked tasks with separate disposable agent and oracle dirs.
 
     The timeout applies separately to each agent and check. The check alone
@@ -282,7 +282,8 @@ def run_batch(tasks, *, config, tier, agent_model, agent_argv, learning, skill_p
             # Create and populate the checker directory only after the agent exits.
             with tempfile.TemporaryDirectory(prefix='second-brain-oracle-') as oracle:
                 _copy_input(task['oracle'], Path(oracle))
-                check = _run(_substitute(task['check']['argv'], prompt, workspace), oracle, timeout)
+                check = _run(_substitute(task['check']['argv'], prompt, workspace), oracle,
+                             timeout if check_timeout is None else check_timeout)
             seconds = time.monotonic() - before
             success = check['returncode'] == task['check']['expect_exit']
             tokens = _tokens(agent['stdout'])
