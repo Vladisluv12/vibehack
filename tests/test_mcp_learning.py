@@ -122,6 +122,27 @@ class GatewayTests(unittest.TestCase):
         actors = {e['actor'] for e in self.brain.ledger.entries() if e['phase'] == 'intent'}
         self.assertIn('agent:qwen3.8-flash', actors)
 
+    def test_tools_work_from_worker_threads_and_reflect_only_own_runs(self):
+        import concurrent.futures
+        from second_brain.reflection import ingest_run
+        source = self.brain.create('Лог', 'термин', kind='source', review='reviewed')
+        self.brain.sync(); self.brain.close()
+        ingest_run(self.learning, {'run_id': 'mine', 'outcome': 'success'}, 'qwen')
+        ingest_run(self.learning, {'run_id': 'theirs', 'outcome': 'success'}, 'other')
+        with mock.patch.dict(sys.modules, {'fastmcp': types.SimpleNamespace(FastMCP=FakeMCP)}):
+            tools = build(self.root/'vault', self.root/'state', 'qwen').tools
+        with concurrent.futures.ThreadPoolExecutor(2) as pool:  # FastMCP runs sync tools off the main thread
+            found = pool.submit(tools['search_knowledge'], 'термин', run_id='t1').result()
+            used = pool.submit(tools['report_usage'], 't1', [source], 'success').result()
+            mine = pool.submit(tools['reflect'], 'mine').result()
+            theirs = pool.submit(tools['reflect'], 'theirs')
+            with self.assertRaises(ValueError):
+                theirs.result()
+        self.assertEqual([n['id'] for n in found['items']], [source])
+        self.assertTrue(used['recorded'])
+        self.assertEqual(mine['event'], 'on_request')
+        self.brain = Brain(self.root/'vault', self.root/'state')
+
 
 if __name__ == '__main__':
     unittest.main()
