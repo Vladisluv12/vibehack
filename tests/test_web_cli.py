@@ -85,6 +85,11 @@ class WebCliTests(unittest.TestCase):
             note = call('/api/brain/note?id=' + saved_answer['id'])
             self.assertEqual((note['space'], note['review'], note['tags']), ('agent', 'proposed', ['chat']))
             self.assertEqual([r['target'] for r in note['relations']], [first['source']])
+            from second_brain.tools import Tools
+            Tools(self.vault, self.state, 'claude-code').get_document(first['source'])
+            feed = call('/api/brain/activity?after=0')
+            self.assertEqual(feed['items'][-1]['actor'], 'claude-code')
+            self.assertIn(first['source'], feed['titles'])
             with self.assertRaises(urllib.error.HTTPError) as bad_links:
                 call('/api/brain/create', {'title': 'x', 'body': 'y', 'links': ['../../etc']})
             self.assertEqual(bad_links.exception.code, 400)

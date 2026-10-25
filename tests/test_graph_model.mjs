@@ -1,6 +1,16 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {adjacency, communities, degrees, importanceTiers, localSubgraph, withPositions} from '../frontend/graph-model.js';
+import {adjacency, communities, degrees, importanceTiers, localSubgraph, shortestPath, withPositions} from '../frontend/graph-model.js';
+
+test('shortest path follows links both ways, respects filter and hop limit', () => {
+  const neighbours = adjacency(graph.links);
+  assert.deepEqual(shortestPath(neighbours, 'a', 'd'), ['a', 'b', 'c', 'd']);
+  assert.deepEqual(shortestPath(neighbours, 'd', 'a'), ['d', 'c', 'b', 'a']);
+  assert.deepEqual(shortestPath(neighbours, 'b', 'b'), ['b']);
+  assert.equal(shortestPath(neighbours, 'a', 'e'), null);
+  assert.equal(shortestPath(neighbours, 'a', 'd', id => id !== 'c'), null);
+  assert.equal(shortestPath(neighbours, 'a', 'd', () => true, 2), null);
+});
 
 const graph = {
   nodes: ['a', 'b', 'c', 'd', 'e'].map(id => ({id, title: id.toUpperCase()})),

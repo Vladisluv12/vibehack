@@ -100,6 +100,33 @@ export function communities(nodes, links, maxRounds = 30) {
   return [...groups].map(([key, ids]) => ({key, ids})).sort((a, b) => b.ids.length - a.ids.length || (a.key < b.key ? -1 : 1));
 }
 
+/**
+ * Shortest path by explicit links (BFS) from `from` to `to`, visiting only nodes
+ * accepted by `allowed`, at most `maxHops` edges. Returns [from, …, to] or null.
+ */
+export function shortestPath(neighbours, from, to, allowed = () => true, maxHops = 6) {
+  if (from === to) return [to];
+  const previous = new Map([[from, null]]);
+  let frontier = [from];
+  for (let hop = 0; hop < maxHops && frontier.length; hop++) {
+    const next = [];
+    for (const id of frontier) {
+      for (const other of neighbours.get(id) || []) {
+        if (previous.has(other) || !allowed(other)) continue;
+        previous.set(other, id);
+        if (other === to) {
+          const path = [to];
+          for (let at = id; at !== null; at = previous.get(at)) path.unshift(at);
+          return path;
+        }
+        next.push(other);
+      }
+    }
+    frontier = next;
+  }
+  return null;
+}
+
 /** 0 = hub (top ~10%), 1 = notable (next ~30%), 2 = the rest; by degree, projects first. */
 export function importanceTiers(nodes) {
   const ranked = [...nodes].sort((a, b) => (b.kind === 'project') - (a.kind === 'project') || (b.degree || 0) - (a.degree || 0) || (a.id < b.id ? -1 : 1));

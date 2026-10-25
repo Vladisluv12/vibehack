@@ -1,6 +1,6 @@
 let checkpoints=null,checkpointAt=0,checkpointPromise=null;
 import ForceGraph from 'force-graph';
-import { adjacency, communities, degrees, endId, importanceTiers, localSubgraph, withPositions } from './graph-model.js';
+import { adjacency, communities, degrees, endId, importanceTiers, localSubgraph, shortestPath, withPositions } from './graph-model.js';
 import { parse } from './markdown.js';
 
 const $ = id => document.getElementById(id);
@@ -54,7 +54,7 @@ function buildModel(g){
     group.name=projectTitles[group.key]||lead?.title||'Без названия';group.color=group.ids.length>1?PALETTE[colour++%PALETTE.length]:LONE;
     for(const id of group.ids)groupOf.set(id,i);
   });
-  tiers=importanceTiers([...byId.values()]);
+  tiers=importanceTiers([...byId.values()]);graphAdj=adjacency(g.links);
 }
 // One set decides what is lit: hover neighbourhood, then legend focus, then search hits.
 function refreshLit(){lit=hover?new Set([hover.id,...(shownAdj.get(hover.id)||[])]):legendFocus?.ids||searchMatches;redraw()}
@@ -83,8 +83,9 @@ function drawNode(node,ctx,scale){
   ctx.save();ctx.globalCompositeOperation='lighter';
   const g=ctx.createRadialGradient(node.x,node.y,r*.3,node.x,node.y,glow);g.addColorStop(0,rgba(c,(tier===0?.5:.26)*a*breath));g.addColorStop(1,rgba(c,0));
   ctx.fillStyle=g;ctx.beginPath();ctx.arc(node.x,node.y,glow,0,TAU);ctx.fill();ctx.restore();
-  const until=flashes.get(node.id);
-  if(until>now){const left=(until-now)/FLASH_MS;ctx.globalAlpha=left;ctx.beginPath();ctx.arc(node.x,node.y,r+2+(1-left)*16,0,TAU);ctx.strokeStyle=c;ctx.lineWidth=2/scale;ctx.stroke()}
+  const glowing=flashes.get(node.id);
+  if(glowing&&glowing.until>now){const left=(glowing.until-now)/glowing.dur;ctx.save();ctx.globalCompositeOperation='lighter';ctx.globalAlpha=left;ctx.beginPath();ctx.arc(node.x,node.y,r+2+(1-left)*18,0,TAU);ctx.strokeStyle=glowing.color||c;ctx.lineWidth=2.2/scale;ctx.stroke();ctx.globalAlpha=left*.35;ctx.fillStyle=glowing.color||c;ctx.beginPath();ctx.arc(node.x,node.y,r*2.4,0,TAU);ctx.fill();ctx.restore()}
+  else if(glowing)flashes.delete(node.id);
   ctx.beginPath();ctx.arc(node.x,node.y,r,0,TAU);
   if(node.review==='unreviewed'){ctx.globalAlpha=a;ctx.fillStyle=BG;ctx.fill();ctx.fillStyle=rgba(c,.22);ctx.fill();ctx.strokeStyle=c;ctx.lineWidth=Math.max(1/scale,r*.32);ctx.stroke()}
   else{ctx.globalAlpha=a*(node.review==='proposed'?.5:1);ctx.fillStyle=c;ctx.fill();if(node.review==='proposed'){ctx.globalAlpha=a;ctx.strokeStyle=c;ctx.lineWidth=Math.max(1/scale,r*.28);ctx.stroke()}}
@@ -115,6 +116,7 @@ function drawLabels(ctx,scale){
     placed.push(box);
     ctx.globalAlpha=f||t===0?1:preferred?.95:t===1?.82:.55;ctx.strokeText(text,x,p.y);ctx.fillStyle=f||t===0?'#ffffff':'#d3d8e0';ctx.fillText(text,x,p.y);
   }
+  drawAgentTags(ctx);
   ctx.restore();
 }
 // Pull each cluster toward its own centre so colours form readable regions, and
@@ -131,7 +133,7 @@ function initializeGraph(){
       .linkWidth(l=>isHot(l)?(l.semantic?1.3:1.8):l.semantic?.6:.7).linkDirectionalParticleWidth(2.6).linkDirectionalParticleSpeed(.007).linkDirectionalParticleColor(l=>colorOf(endId(l.source)))
       .onNodeClick(node=>openNote(node.id)).onNodeHover(node=>{hover=node||null;$('graph').style.cursor=node?'pointer':'';refreshLit()})
       .onBackgroundClick(()=>{if(legendFocus){legendFocus=null;renderLegend();refreshLit();status()}})
-      .onRenderFramePre(drawClusterGlow).onRenderFramePost(drawLabels)
+      .onRenderFramePre(drawClusterGlow).onRenderFramePost(postFrame)
       .onEngineStop(()=>{if(fitPending){fitPending=false;fit(reduced?0:900)}})
       .minZoom(.15).maxZoom(10).warmupTicks(reduced?300:0).cooldownTicks(reduced?0:260);
     graph.d3Force('charge').strength(-95).distanceMax(260);graph.d3Force('link').distance(38).strength(l=>l.semantic?.04:1/Math.max(1,Math.min(linkCounts.get(endId(l.source))||1,linkCounts.get(endId(l.target))||1)));graph.d3Force('cluster',clusterForce());
@@ -179,8 +181,8 @@ function renderLegend(){
 }
 function flash(ids){
   if(!graph)return;const until=performance.now()+FLASH_MS;
-  for(const id of ids){if(!shown.has(id))continue;flashes.set(id,until);if(!reduced)for(const link of graph.graphData().links.filter(l=>touches(l,id)).slice(0,6))graph.emitParticle(link)}
-  graph.autoPauseRedraw(false);clearTimeout(flash.timer);flash.timer=setTimeout(()=>{flashes.clear();graph.autoPauseRedraw(reduced||shown.size>300);redraw()},FLASH_MS+50);
+  for(const id of ids){if(!shown.has(id))continue;flashes.set(id,{until,dur:FLASH_MS});if(!reduced)for(const link of graph.graphData().links.filter(l=>touches(l,id)).slice(0,6))graph.emitParticle(link)}
+  keepAnimating(FLASH_MS+100);
 }
 async function load(refit=false){
   try{const g=await api('brain/graph?'+new URLSearchParams(spaceQuery()));$('count-human').textContent=g.spaces.human;$('count-agent').textContent=g.spaces.agent;buildModel(g);if(legendFocus)legendFocus=null;renderLegend();renderKpis();showGraph(refit);if(drawerOpen()){renderKindFilter();loadCatalog()}loadSemantic()}catch(e){notify(e.message,true)}
@@ -496,7 +498,7 @@ async function sendChat(){
     const history=chatMessages.filter(m=>!m.error).map(m=>({role:m.role,content:m.content})).slice(-12);
     const result=await api('brain/chat',{messages:history,space:space==='all'?'':space});
     chatMessages.push({role:'assistant',content:result.answer,sources:result.sources,question:text});
-    const ids=result.sources.filter(s=>s.cited).map(s=>s.id);if(ids.length)flash(ids);
+    pollBrainActivity();
   }catch(e){chatMessages.push({role:'assistant',content:'Не получилось ответить: '+e.message,error:true})}
   finally{chatBusy=false;renderChat()}
 }
@@ -547,6 +549,104 @@ async function pollActivity(){
   finally{activityBusy=false}
 }
 
+// ── Live agent activity: a cursor per agent walks the graph to the notes it touches ──
+const AGENT_COLORS=['#8ee07a','#7dd3fc','#f2c14e','#e879c9','#a98bff','#f28b40','#4fd1c5'];
+const agents=new Map();let graphAdj=new Map(),animUntil=0,animTimer;
+const ACTIONS={'memory.search':'ищет','memory.read':'читает','memory.traverse':'обходит связи','memory.draft':'пишет черновик','chat.answer':'отвечает по заметкам'};
+function keepAnimating(ms){
+  if(!graph)return;animUntil=Math.max(animUntil,performance.now()+ms);graph.autoPauseRedraw(false);clearTimeout(animTimer);
+  animTimer=setTimeout(function check(){if([...agents.values()].some(a=>a.queue.length)||performance.now()<animUntil){animTimer=setTimeout(check,400);return}graph.autoPauseRedraw(reduced||shown.size>300);redraw()},ms+60);
+}
+function pulse(id,color,dur=FLASH_MS){if(shown.has(id))flashes.set(id,{until:performance.now()+dur,color,dur})}
+function agentFor(actor){let agent=agents.get(actor);if(!agent){agent={actor,color:AGENT_COLORS[agents.size%AGENT_COLORS.length],queue:[],node:null,pos:null,trail:[],action:'',seen:0,alpha:0};agents.set(actor,agent)}return agent}
+function linkBetween(a,b){return graph?.graphData().links.find(l=>!l.semantic&&((endId(l.source)===a&&endId(l.target)===b)||(endId(l.source)===b&&endId(l.target)===a)))}
+// Walk along explicit links (shortest path) when there is one; otherwise fly straight.
+function walk(agent,target,action){
+  if(!shown.has(target))return;
+  const from=agent.queue.length?agent.queue[agent.queue.length-1].to:agent.node;
+  const path=from&&shown.has(from)?shortestPath(graphAdj,from,target,id=>shown.has(id))||[from,target]:[target];
+  if(path.length===1)agent.queue.push({to:target,dur:650,action,final:true});
+  for(let i=1;i<path.length;i++)agent.queue.push({from:path[i-1],to:path[i],dur:path.length>2?330:650,action,final:i===path.length-1});
+  keepAnimating(4000);
+}
+function fan(agent,center,ids,action){if(!shown.has(center))return;walk(agent,center,action);agent.queue.push({to:center,dur:900,fan:ids.filter(id=>shown.has(id)),action,final:true});keepAnimating(5000)}
+function stepAgent(agent,now){
+  const seg=agent.queue[0],target=seg&&shown.get(seg.to);if(!seg)return;
+  if(!target||!Number.isFinite(target.x)){agent.queue.shift();return}
+  if(!seg.start){
+    seg.start=now;seg.origin=agent.pos?{...agent.pos}:null;agent.action=seg.action;
+    const link=seg.from&&linkBetween(seg.from,seg.to);if(link&&!reduced)graph.emitParticle(link);
+    for(const id of seg.fan||[]){const spoke=linkBetween(seg.to,id);if(spoke&&!reduced)graph.emitParticle(spoke);pulse(id,agent.color,1800)}
+  }
+  const t=Math.min(1,reduced?1:(now-seg.start)/seg.dur),e=t<.5?2*t*t:1-(-2*t+2)**2/2,o=seg.origin||target;
+  agent.pos={x:o.x+(target.x-o.x)*e,y:o.y+(target.y-o.y)*e};agent.seen=now;
+  if(t>=1){agent.node=seg.to;agent.queue.shift();pulse(seg.to,agent.color,seg.final?2400:900)}
+}
+function drawAgents(ctx,scale){
+  const now=performance.now();
+  for(const agent of agents.values()){
+    stepAgent(agent,now);
+    agent.alpha=agent.pos?Math.max(0,1-Math.max(0,now-agent.seen-6000)/4000):0;
+    if(!agent.alpha){agent.trail=[];continue}
+    const {x,y}=agent.pos;agent.trail.push({x,y});if(agent.trail.length>24)agent.trail.shift();
+    ctx.save();ctx.globalCompositeOperation='lighter';ctx.strokeStyle=agent.color;ctx.lineCap='round';
+    for(let i=1;i<agent.trail.length;i++){const a=agent.trail[i-1],b=agent.trail[i],k=i/agent.trail.length;ctx.globalAlpha=agent.alpha*k*.85;ctx.lineWidth=(1+4*k)/scale;ctx.beginPath();ctx.moveTo(a.x,a.y);ctx.lineTo(b.x,b.y);ctx.stroke()}
+    const r=18/scale,g=ctx.createRadialGradient(x,y,0,x,y,r);g.addColorStop(0,rgba(agent.color,.95*agent.alpha));g.addColorStop(.3,rgba(agent.color,.4*agent.alpha));g.addColorStop(1,rgba(agent.color,0));
+    ctx.globalAlpha=1;ctx.fillStyle=g;ctx.beginPath();ctx.arc(x,y,r,0,TAU);ctx.fill();
+    ctx.globalCompositeOperation='source-over';ctx.globalAlpha=agent.alpha;ctx.fillStyle='#fff';ctx.beginPath();ctx.arc(x,y,3.2/scale,0,TAU);ctx.fill();
+    ctx.restore();
+  }
+}
+function drawAgentTags(ctx){
+  for(const agent of agents.values()){
+    if(!agent.alpha||!agent.pos)continue;
+    const p=graph.graph2ScreenCoords(agent.pos.x,agent.pos.y),text=`${agent.actor} · ${agent.action}`.slice(0,60);
+    ctx.font='600 11px Inter,"Segoe UI",system-ui,sans-serif';const w=ctx.measureText(text).width,x=p.x+14,y=p.y-24;
+    ctx.globalAlpha=agent.alpha;ctx.fillStyle='rgba(10,12,16,.88)';ctx.strokeStyle=agent.color;ctx.lineWidth=1;
+    ctx.beginPath();ctx.roundRect(x-8,y-10,w+16,20,10);ctx.fill();ctx.stroke();ctx.fillStyle=agent.color;ctx.fillText(text,x,y);
+  }
+}
+function postFrame(ctx,scale){drawAgents(ctx,scale);drawLabels(ctx,scale)}
+function animateEvent(item){
+  const agent=agentFor(item.actor),[first,...rest]=item.ids;
+  if(item.type==='memory.search'){
+    item.ids.forEach((id,i)=>setTimeout(()=>{pulse(id,agent.color,1700);keepAnimating(2000)},reduced?0:i*120));
+    if(first)walk(agent,first,`ищет «${item.query.slice(0,40)}»`);
+  }else if(item.type==='memory.read'&&first)walk(agent,first,'читает');
+  else if(item.type==='memory.traverse'&&first)fan(agent,first,rest,'обходит связи');
+  else if(item.type==='chat.answer')item.ids.forEach(id=>walk(agent,id,'цитирует'));
+  else if(item.type==='memory.draft'&&first){
+    if(rest[0])walk(agent,rest[0],'собирает черновик');
+    load().then(()=>fan(agent,first,rest,'пишет черновик'));
+  }
+}
+let brainCursor=null,brainFeed=[],brainBusy=false;
+function renderBrainFeed(){
+  if(extension.connected)return;
+  const panel=$('activity-panel'),recent=brainFeed.filter(i=>Date.now()/1000-i.ts<60).length;
+  panel.hidden=!brainFeed.length;$('activity-feed').replaceChildren();
+  panel.querySelector('.activity-heading span').textContent='Обращения агентов';
+  $('activity-state').textContent=recent?`${recent} за минуту`:'тихо';
+  for(const item of brainFeed.slice(0,6)){
+    const row=el('div',undefined,'activity-row live-row'),agent=agentFor(item.actor),subject=item.type==='memory.search'?`«${item.query}» → ${item.ids.length}`:titleOf(item.ids[0]||'');
+    row.style.setProperty('--dot',agent.color);
+    row.append(el('time',new Date(item.ts*1000).toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit',second:'2-digit'})),el('span',`${item.actor} ${ACTIONS[item.type]||item.type} ${subject}`));
+    row.title=row.lastChild.textContent;if(item.ids[0]&&item.type!=='memory.search')row.onclick=()=>openNote(item.ids[0]);
+    $('activity-feed').append(row);
+  }
+  if(recent)connection(`агенты работают · ${recent} обращений за минуту`);else if(!extension.connected)connection('Локально · без сети');
+}
+async function pollBrainActivity(){
+  if(brainBusy)return;brainBusy=true;
+  try{
+    const result=await api('brain/activity'+(brainCursor===null?'':'?after='+brainCursor));
+    for(const [id,title] of Object.entries(result.titles||{}))knownTitles.set(id,title);
+    brainCursor=result.cursor;
+    for(const item of result.items){brainFeed.unshift(item);if(item.live)animateEvent(item)}
+    brainFeed=brainFeed.slice(0,40);if(result.items.length||result.initial)renderBrainFeed();
+  }catch{}finally{brainBusy=false}
+}
+
 // ── Actions ───────────────────────────────────────────────────────────────
 $('sync').onclick=()=>run($('sync'),async()=>{const result=await api('brain/sync',{});await load();notify(`Обновлено: ${result.notes} заметок, ${result.links} связей.`+(result.warning_count?` Замечаний к связям: ${result.warning_count}.`:''))});
 $('backup').onclick=()=>run($('backup'),async()=>{const result=await api('brain/backup',{});notify('Копия Markdown и версий сохранена: '+result.path)});
@@ -562,9 +662,10 @@ $('fit').onclick=()=>fit();
 initializeGraph();
 extension=await api('extension').catch(()=>({connected:false}));applyExtension();
 await api('settings').then(applySettings).catch(()=>{});
-await load(true);await pollActivity();
+await load(true);await pollActivity();await pollBrainActivity();
 const initial=new URLSearchParams(location.hash.slice(1)).get('note');if(initial)openNote(initial);
 setInterval(()=>{if(!document.hidden)pollActivity()},1800);
+setInterval(()=>{if(!document.hidden)pollBrainActivity()},1200);
 
 async function showProjectMetrics(note,selection){
   $('project-checkpoint').hidden=note.kind!=='project'||!extension.connected;if(note.kind!=='project'||!extension.connected)return;

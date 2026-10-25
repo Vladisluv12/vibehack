@@ -8,6 +8,7 @@ from pathlib import Path
 from urllib.parse import urlsplit, parse_qs
 
 from .brain import ID, MAX_TAGS, Brain, normalise_tag
+from .activity import safe_record, since
 from .chat import answer as chat_answer
 from .embeddings import chat_complete, load_settings, public_settings, update_settings
 from .github import import_github
@@ -116,6 +117,12 @@ def make_server(vault, state, port=8765, extension=None, open_brain=None):
                     result = b.get(params.get('id', [''])[0])
                 elif action == 'graph':
                     result = b.graph(params.get('q', [''])[0], params.get('kind', [''])[0], space=params.get('space', [''])[0])
+                elif action == 'activity':
+                    after = params.get('after', [None])[0]
+                    result = since(state_dir, int(after) if after not in (None, '') else None)
+                    ids = {i for item in result['items'] for i in item['ids']}
+                    result['titles'] = {r[0]: r[1] for r in b.db.execute(
+                        f"SELECT id,title FROM notes WHERE id IN ({','.join('?' * len(ids))})", tuple(ids))} if ids else {}
                 elif action == 'tags':
                     result = b.tags(params.get('space', [''])[0])
                 elif action == 'search':
@@ -199,6 +206,9 @@ def make_server(vault, state, port=8765, extension=None, open_brain=None):
                         result = chat_answer(b, semantic, load_settings(state_dir), data.get('messages'), data.get('space') or '')
                     finally:
                         semantic.close()
+                    question = data['messages'][-1]['content']
+                    safe_record(state_dir, 'chat', 'memory.search', [s['id'] for s in result['sources']], question)
+                    safe_record(state_dir, 'chat', 'chat.answer', [s['id'] for s in result['sources'] if s['cited']], question)
                 elif action == 'link':
                     result = b.add_link(data['source'], data['target'])
                 elif action == 'dismiss':
