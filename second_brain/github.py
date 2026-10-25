@@ -99,26 +99,61 @@ def markdown_members(archive):
     return files, skipped, omitted
 
 
+SHA = re.compile(r'^[0-9a-f]{40}$')
+
+
+def previous_version(brain, home, path):
+    row = brain.db.execute(
+        "SELECT id, meta FROM notes WHERE kind='source' AND json_extract(meta,'$.repository')=? "
+        "AND json_extract(meta,'$.repo_path')=? AND id NOT IN (SELECT json_extract(meta,'$.supersedes') FROM notes "
+        "WHERE json_extract(meta,'$.supersedes') IS NOT NULL) ORDER BY json_extract(meta,'$.created') DESC, id LIMIT 1",
+        (home, path)).fetchone()
+    return (row['id'], json.loads(row['meta']).get('source_hash', '')) if row else (None, '')
+
+
 def import_github(brain, url, fetcher=None):
+    """One import run per commit. Branch names move, so sources cite the resolved
+    commit; unchanged files keep their note, a changed file gets a new note that
+    names the version it supersedes. Nothing is overwritten or deleted."""
     fetcher = fetcher or fetch
     owner, repo = parse_repo(url)
-    meta = json.loads(fetcher(f'https://api.github.com/repos/{owner}/{repo}', MAX_META))
+    api = f'https://api.github.com/repos/{owner}/{repo}'
+    meta = json.loads(fetcher(api, MAX_META))
     branch = meta.get('default_branch') if isinstance(meta, dict) else None
     if not isinstance(branch, str) or not branch or len(branch) > 255:
         raise ValueError('GitHub returned unexpected repository metadata')
     description = meta.get('description') if isinstance(meta.get('description'), str) else ''
-    archive = fetcher(f'https://api.github.com/repos/{owner}/{repo}/tarball/{quote(branch, safe="")}', MAX_ARCHIVE)
+    head = json.loads(fetcher(f'{api}/branches/{quote(branch, safe="")}', MAX_META))
+    commit = head.get('commit', {}).get('sha') if isinstance(head, dict) and isinstance(head.get('commit'), dict) else None
+    if not isinstance(commit, str) or not SHA.fullmatch(commit):
+        raise ValueError('GitHub returned unexpected branch metadata')
+    archive = fetcher(f'{api}/tarball/{commit}', MAX_ARCHIVE)
     files, skipped, omitted = markdown_members(archive)
     home = f'https://github.com/{owner}/{repo}'
-    body = (description.strip() + '\n\n' if description.strip() else '') + f'Репозиторий GitHub, ветка `{branch}`. Markdown-файлов импортировано: {len(files)}.'
+    body = (description.strip() + '\n\n' if description.strip() else '') + 'Репозиторий GitHub. Каждый импорт — отдельная запись сессии с коммитом и списком файлов.'
     project = brain.create(f'{owner}/{repo}', body, kind='project', review='unreviewed', source=home,
-                           source_hash=digest(archive), key='github:' + home, external_content=True,
+                           key='github:' + home, external_content=True,
                            extra={'repository': home, 'branch': branch})
-    sources = []
+    brain.sync()
+    sources, changed = [], 0
     for path, text, raw in files:
-        source = f'{home}/blob/{quote(branch, safe="")}/{quote(path)}'
-        sources.append(brain.create(f'{repo}/{path}'[:200], text, kind='source', review='unreviewed', source=source,
-                                    source_hash=digest(raw), key=source + digest(raw), links=[project],
-                                    external_content=True, extra={'repository': home, 'repo_path': path}))
-    return {'project': project, 'repository': home, 'branch': branch, 'imported': len(sources),
-            'sources': sources, 'skipped': skipped, 'omitted': omitted}
+        previous, previous_hash = previous_version(brain, home, path)
+        if previous and previous_hash == digest(raw):
+            sources.append(previous)
+            continue
+        extra = {'repository': home, 'repo_path': path, 'commit': commit}
+        if previous:
+            extra['supersedes'] = previous
+            changed += 1
+        sources.append(brain.create(f'{repo}/{path}'[:200], text, kind='source', review='unreviewed',
+                                    source=f'{home}/blob/{commit}/{quote(path)}', source_hash=digest(raw),
+                                    key=f'{home}#{path}@{digest(raw)}', links=[project],
+                                    external_content=True, extra=extra))
+    run = brain.create(f'{owner}/{repo} @ {commit[:12]}',
+                       f'Импорт ветки `{branch}`, коммит `{commit}`. Markdown-файлов: {len(files)}, '
+                       f'изменилось: {changed}, пропущено: {skipped}, не вошло по лимиту: {omitted}.',
+                       kind='session', review='unreviewed', source=f'{home}/tree/{commit}',
+                       source_hash=digest(archive), key=f'github-run:{home}@{commit}', links=[project, *dict.fromkeys(sources)],
+                       external_content=True, extra={'repository': home, 'branch': branch, 'commit': commit})
+    return {'project': project, 'run': run, 'repository': home, 'branch': branch, 'commit': commit,
+            'imported': len(sources), 'changed': changed, 'sources': sources, 'skipped': skipped, 'omitted': omitted}

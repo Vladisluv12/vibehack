@@ -4,9 +4,9 @@ Spec: `specs/model-tiers-learning.md`. База: `vibehack@a598515`, ветка 
 Каждый шаг — отдельный коммит с тестом; `make test` зелёный после каждого.
 
 ## Фаза 0 — дефекты, мешающие всему остальному
-- [ ] F3: `create_draft` → `declared_only=true`, `proposed_links` во frontmatter; тест AC1
-- [ ] F1: GitHub-импорт резолвит SHA коммита один раз, tarball и URL источников по SHA
-- [ ] F2: версия импорта (`import_run`), новая версия источника `supersedes` старую
+- [x] F3: `create_draft` → `declared_only=true`, `proposed_links` во frontmatter; тест AC1
+- [x] F1: GitHub-импорт резолвит SHA коммита один раз, tarball и URL источников по SHA
+- [x] F2: версия импорта (`import_run`), новая версия источника `supersedes` старую
 
 ## Фаза 1 — фундамент для обоих уровней
 - [ ] R0: `state/agents.json`, `--agent-model`, `agent_model/agent_tier` в записях; тест AC6
