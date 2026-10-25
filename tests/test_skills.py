@@ -120,11 +120,15 @@ class SkillsTests(unittest.TestCase):
         ingest_run(self.learning, {'run_id': 'run', 'agent_model': 'small', 'task': 'build', 'outcome': 'success'}, 'small')
         self.pack(budget_chars=10)
         self.assertEqual(self.learning.db.execute('SELECT count(*) FROM served').fetchone()[0], 0)
-        self.pack()
+        self.pack(agent_model='small', session='s1')
         served = [dict(r) for r in self.learning.db.execute('SELECT * FROM served')]
         self.assertEqual(len(served), 1)
-        self.assertEqual((served[0]['run_id'], served[0]['note_id'], served[0]['tool'], served[0]['agent_model']),
-                         ('run', ident, 'skill_pack', 'small'))
+        self.assertEqual((served[0]['run_id'], served[0]['note_id'], served[0]['tool'], served[0]['agent_model'],
+                          served[0]['session']), ('run', ident, 'skill_pack', 'small', 's1'))
+        # The gateway that served the pack can credit it; another process cannot.
+        self.assertFalse(self.learning.report_usage('run', [ident], 'success', 'small', 's2')['recorded'])
+        self.assertTrue(self.learning.report_usage('run', [ident], 'success', 'small', 's1')['recorded'])
+        self.assertEqual(self.learning.usefulness(ident)['helped_runs'], 1)
 
     def test_pagination_does_not_hide_skill_after_non_skills(self):
         self.enable()

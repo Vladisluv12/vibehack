@@ -72,7 +72,8 @@ class EvalTests(unittest.TestCase):
         for directory in (self.task_dir.parent / 'workspace', self.task_dir / 'oracle'):
             for path in directory.rglob('*'):
                 if path.is_file():
-                    files[path.relative_to(self.task_dir.parent).as_posix()] = hashlib.sha256(path.read_bytes()).hexdigest()
+                    files[path.relative_to(self.task_dir.parent).as_posix()] = (
+                        hashlib.sha256(path.read_bytes()).hexdigest() + f':{stat.S_IMODE(path.stat().st_mode):o}')
         manifest = json.dumps(sorted(files.items()), separators=(',', ':'), ensure_ascii=True).encode('utf-8')
         expected = hashlib.sha256(self.task_file.read_bytes() + b'\0' + manifest).hexdigest()
         self.assertEqual(lock, {'skill-task': expected})
@@ -588,6 +589,19 @@ class EvalTests(unittest.TestCase):
             metrics(self.learning, 'missing')
         with self.assertRaisesRegex(ValueError, 'resamples'):
             self.decision(resamples=0)
+
+
+class InputModeTests(unittest.TestCase):
+    def test_making_an_input_executable_breaks_the_lock(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            shutil.copytree(FIXTURES / 'tasks', root / 'tasks')
+            shutil.copytree(FIXTURES / 'workspace', root / 'workspace')
+            lock_tasks(root / 'tasks')
+            target = next((root / 'workspace').rglob('*.txt'))
+            target.chmod(0o755)
+            with self.assertRaises(ValueError):
+                load_tasks(root / 'tasks')
 
 
 if __name__ == '__main__':

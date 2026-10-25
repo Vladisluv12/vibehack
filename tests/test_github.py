@@ -143,6 +143,15 @@ class GitHubTests(unittest.TestCase):
         again = import_github(self.brain, 'acme/tools', github('d' * 40, a))
         self.assertEqual((again['sources'][0], again['changed']), (v3, 0))
 
+    def test_branch_moving_back_to_an_older_commit_is_a_new_version(self):
+        files = {sha: [(ROOT + 'docs/setup.md', f'# {sha[0]}\n'.encode())] for sha in (SHA1, SHA2, 'c' * 40)}
+        ids = [import_github(self.brain, 'acme/tools', github(sha, files[sha]))['sources'][0] for sha in files]
+        back = import_github(self.brain, 'acme/tools', github(SHA2, files[SHA2]))
+        self.brain.sync()
+        self.assertNotIn(back['sources'][0], ids)
+        self.assertEqual(self.brain.get(back['sources'][0])['meta']['supersedes'], ids[2])
+        self.assertEqual(import_github(self.brain, 'acme/tools', github(SHA2, files[SHA2]))['changed'], 0)
+
     def test_branch_metadata_must_name_a_commit(self):
         def bad(url, limit):
             if url.endswith('/branches/main'):

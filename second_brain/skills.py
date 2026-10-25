@@ -35,7 +35,7 @@ def scope_words(text):
 
 
 def skill_pack(brain, learning, *, tier, task, run_id, k=3, budget_chars=4000, include_reflected=True,
-               for_evaluation=False) -> dict:
+               for_evaluation=False, agent_model='', session='') -> dict:
     """Return at most k reviewed, task-matching skills within a character budget.
 
     Canary membership is sha256(cleaned run_id + skill_id) modulo 100 < 20.
@@ -101,9 +101,8 @@ def skill_pack(brain, learning, *, tier, task, run_id, k=3, budget_chars=4000, i
     if not parts:
         return empty
     ids = [ident for ident, _, _ in parts]
-    run = learning.db.execute('SELECT agent_model FROM runs WHERE run_id=?', (run_id,)).fetchone()
-    # Packs normally precede ingestion, so a model is not yet available there.
-    learning.served(run_id, ids, 'skill_pack', clean_text(run['agent_model'], 200) if run else '')
+    # The gateway names the model and session, so report_usage can credit the pack.
+    learning.served(run_id, ids, 'skill_pack', agent_model, session)
     return {'text': _render(parts), 'skill_ids': ids, 'canary_ids': canaries}
 
 

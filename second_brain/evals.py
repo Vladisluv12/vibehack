@@ -96,7 +96,9 @@ def _input_files(directory, root):
             for child in sorted(path.iterdir()):
                 visit(child)
         else:
-            files[path.relative_to(root).as_posix()] = hashlib.sha256(path.read_bytes()).hexdigest()
+            # Mode matters too: an input turning executable changes what a task does.
+            files[path.relative_to(root).as_posix()] = (hashlib.sha256(path.read_bytes()).hexdigest()
+                                                        + f':{stat.S_IMODE(path.stat().st_mode):o}')
 
     visit(directory)
     return files

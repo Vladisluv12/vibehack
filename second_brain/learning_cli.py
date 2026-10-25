@@ -3,6 +3,7 @@
 External models are argv JSON files (no shell, no keys in config): the prompt goes
 to stdin, the answer is read from stdout.
 """
+import hashlib
 import json
 from pathlib import Path
 import subprocess
@@ -24,6 +25,7 @@ def add_commands(cmds):
     c = cmds.add_parser('reflect-request', help='Queue reflection for one run on demand'); c.add_argument('run_id')
     c = cmds.add_parser('review', help='Process pending reflection triggers with an external model')
     c.add_argument('--llm', type=Path, required=True, help='JSON argv of a model CLI that reads the prompt on stdin')
+    c.add_argument('--llm-model', required=True, help='Model id that argv runs; journaled with every draft')
     c.add_argument('--limit', type=int, default=5); c.add_argument('--budget', type=int, default=60000)
     c.add_argument('--timeout', type=float, default=600)
     c = cmds.add_parser('skill-pack', help='Skills to prepend to a task prompt for a model')
@@ -63,7 +65,7 @@ def run(args):
     brain = None
     try:
         if args.cmd in ('lint', 'review', 'skill-pack', 'eval-run'):
-            reviewer_meta = {'agent_model': args.llm.stem} if args.cmd == 'review' else None
+            reviewer_meta = {'agent_model': args.llm_model, 'tier': 'reviewer'} if args.cmd == 'review' else None
             brain = Brain(args.vault, args.state, actor='agent:reviewer' if args.cmd == 'review' else 'human:local',
                           actor_meta=reviewer_meta)
             if args.cmd != 'lint':  # lint reads the files itself and must explain a vault sync rejects
@@ -94,7 +96,8 @@ def run(args):
             if args.config != 'A':
                 def pack(task):
                     return skills.skill_pack(brain, learning, tier=tier, task=task['applies_to'] or task['prompt'],
-                                             run_id=f"eval:{task['id']}", include_reflected=args.config == 'C',
+                                             run_id='eval:' + hashlib.sha256(task['id'].encode()).hexdigest()[:24],
+                                             include_reflected=args.config == 'C',
                                              for_evaluation=True)['text']
             batch = evals.run_batch(tasks, config=args.config, tier=tier, agent_model=args.model,
                                     agent_argv=evals.load_agent_argv(args.agent), learning=learning,

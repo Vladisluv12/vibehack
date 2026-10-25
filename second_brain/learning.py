@@ -15,7 +15,7 @@ import time
 
 from .redact import redact
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 TIERS = ('weak', 'frontier')
 DEFAULT_TIER = 'frontier'  # unknown models get no automatic self-improvement
 MECHANISMS = ('skills', 'reflection')
@@ -40,6 +40,8 @@ MIGRATIONS = {
     ],
     # Batches are comparable only on identical task definitions and inputs.
     2: ['ALTER TABLE eval_results ADD COLUMN task_hash TEXT'],
+    # Usage reports bind to the gateway process that served the notes, not just the model.
+    3: ['ALTER TABLE served ADD COLUMN session TEXT'],
 }
 RUN_ID = re.compile(r'^[A-Za-z0-9_.:-]{1,100}$')
 
@@ -154,26 +156,27 @@ class Learning:
         return [dict(r) for r in self.db.execute('SELECT * FROM mechanisms ORDER BY tier, name')]
 
     # -- retrieval usage ----------------------------------------------------------
-    def served(self, run_id, note_ids, tool, model):
+    def served(self, run_id, note_ids, tool, model, session=''):
         if not run_id:
             return
         run_id, now = clean_run_id(run_id), time.time()
         with self.db:
-            self.db.executemany('INSERT INTO served VALUES (?,?,?,?,?)',
-                                [(run_id, n, tool, model or '', now) for n in clean_ids(list(note_ids))])
+            self.db.executemany('INSERT INTO served (run_id, note_id, tool, agent_model, ts, session) VALUES (?,?,?,?,?,?)',
+                                [(run_id, n, tool, model or '', now, session) for n in clean_ids(list(note_ids))])
 
-    def report_usage(self, run_id, used_ids, outcome, model=''):
-        """What the agent relied on, out of what this same model was served in this run.
+    def report_usage(self, run_id, used_ids, outcome, model='', session=''):
+        """What the agent relied on, out of what this same gateway session served in this run.
 
         Notes it was not served are ignored, and the first report for a run stands:
-        a later call cannot rewrite it or another model's run.
+        a later call, or another process using the same run id, cannot rewrite it.
         """
         run_id = clean_run_id(run_id)
         if outcome not in ('success', 'failure', 'unknown'):
             raise ValueError('outcome must be success, failure or unknown')
         used = set(clean_ids(used_ids))
         served = {r['note_id'] for r in self.db.execute(
-            'SELECT DISTINCT note_id FROM served WHERE run_id=? AND agent_model=?', (run_id, model or ''))}
+            "SELECT DISTINCT note_id FROM served WHERE run_id=? AND agent_model=? AND coalesce(session,'')=?",
+            (run_id, model or '', session))}
         if self.db.execute('SELECT 1 FROM usage WHERE run_id=? LIMIT 1', (run_id,)).fetchone():
             return {'run_id': run_id, 'recorded': False, 'reason': 'usage already reported for this run'}
         now = time.time()

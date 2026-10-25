@@ -84,6 +84,12 @@ class GatewayTests(unittest.TestCase):
         self.brain.sync()
         self.assertEqual([n['id'] for n in search(self.brain, self.learning, 'кэш')['items']], [better, worse])
 
+    def test_reviewed_wins_an_exact_tie_at_the_cut_off(self):
+        ids = sorted([self.brain.create('Одинаково', 'кэш', review=r) for r in ('proposed', 'reviewed')])
+        self.brain.sync()
+        reviewed = next(i for i in ids if self.brain.get(i)['review'] == 'reviewed')
+        self.assertEqual([n['id'] for n in search(self.brain, self.learning, 'кэш', top_k=1)['items']], [reviewed])
+
     def test_usage_separates_served_from_helpful(self):
         notes = [self.brain.create(f'Заметка {i}', 'общий термин', review='reviewed') for i in range(3)]
         self.brain.sync()

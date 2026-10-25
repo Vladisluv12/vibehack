@@ -18,6 +18,10 @@ import uuid
 TERMINAL = {'commit', 'abort'}
 
 
+class LedgerCorrupt(ValueError):
+    pass
+
+
 def sha(text):
     return hashlib.sha256(text.encode()).hexdigest() if text is not None else None
 
@@ -37,7 +41,7 @@ class Ledger:
             if size:
                 stream.seek(size - 1)
                 if stream.read(1) != b'\n':
-                    stream.write(b'\n')
+                    stream.write(b'\n' + json.dumps({'phase': 'torn'}).encode() + b'\n')
             stream.write(line.encode('utf-8'))
             stream.flush()
             os.fsync(stream.fileno())
@@ -57,16 +61,23 @@ class Ledger:
         return digest
 
     def entries(self):
+        """Parsed records. A torn line (an intent cut before its fsync, which changed
+        nothing) is acceptable only at the end or right before the marker _append
+        writes when it terminates one; any other damage stops all writes."""
         if not self.path.exists():
             return []
+        lines = self.path.read_text(encoding='utf-8').splitlines()
         result = []
-        for line in self.path.read_text(encoding='utf-8').splitlines():
+        for number, line in enumerate(lines):
             try:
-                result.append(json.loads(line))
+                entry = json.loads(line)
             except ValueError:
-                # Torn lines are intents cut before their fsync completed; the file
-                # write only starts after a complete intent, so they changed nothing.
-                continue
+                following = lines[number + 1] if number + 1 < len(lines) else None
+                if following is None or following == json.dumps({'phase': 'torn'}):
+                    continue
+                raise LedgerCorrupt(f'{self.path}: damaged record at line {number + 1}; restore it before writing')
+            if entry.get('phase') != 'torn':
+                result.append(entry)
         return result
 
     @contextmanager

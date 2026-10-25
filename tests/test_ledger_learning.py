@@ -101,6 +101,16 @@ class LedgerTests(unittest.TestCase):
         self.assertEqual([e['phase'] for e in settled], ['commit'])
         other.close()
 
+    def test_damage_inside_the_journal_stops_writes(self):
+        self.brain.create('Первая', 'текст')
+        lines = self.brain.ledger.path.read_text(encoding='utf-8').splitlines()
+        lines[0] = lines[0][:20]  # an intent damaged in the middle of the file, not a torn tail
+        self.brain.ledger.path.write_text('\n'.join(lines) + '\n', encoding='utf-8')
+        from second_brain.ledger import LedgerCorrupt
+        with self.assertRaises(LedgerCorrupt):
+            self.brain.create('Вторая', 'текст')
+        self.assertEqual(len(list((self.root/'vault').rglob('Notes/*.md'))), 1)
+
     def test_agent_model_and_tier_are_journaled(self):
         brain = Brain(self.root/'vault', self.root/'state', actor='agent:qwen',
                       actor_meta={'agent_model': 'qwen', 'tier': 'weak'})
@@ -161,7 +171,7 @@ class TierTests(unittest.TestCase):
     def test_interrupted_migration_leaves_no_half_schema(self):
         import sqlite3
         from second_brain import learning as module
-        broken = {1: module.MIGRATIONS[1][:2] + ['CREATE TABLE served (x)'], 2: module.MIGRATIONS[2]}
+        broken = {**module.MIGRATIONS, 1: module.MIGRATIONS[1][:2] + ['CREATE TABLE served (x)']}
         with mock.patch.object(module, 'MIGRATIONS', broken):
             with self.assertRaises(sqlite3.OperationalError):
                 Learning(self.state)
@@ -182,7 +192,7 @@ class TierTests(unittest.TestCase):
 
     def test_schema_is_versioned(self):
         learning = Learning(self.state)
-        self.assertEqual(learning.db.execute('PRAGMA user_version').fetchone()[0], 2)
+        self.assertEqual(learning.db.execute('PRAGMA user_version').fetchone()[0], 3)
         learning.close()
         Learning(self.state).close()  # reopening does not re-run migrations
 

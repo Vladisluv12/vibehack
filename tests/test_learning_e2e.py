@@ -74,7 +74,7 @@ class LearningLoopTests(unittest.TestCase):
         self.assertEqual((frontier[0]['tier'], frontier[0]['triggers']), ('frontier', []))
 
         llm = self.write('llm.json', [sys.executable, str(self.write('fake_llm.py', FAKE_LLM))])
-        reviewed = self.cli('review', '--llm', str(llm))
+        reviewed = self.cli('review', '--llm', str(llm), '--llm-model', 'fake-llm')
         drafts = {r['note_id'] for r in reviewed if r['status'] == 'done'}
         self.assertEqual(len(drafts), 1)  # the second trigger proposes the same draft: deduplicated
         skill = drafts.pop()
@@ -129,6 +129,21 @@ class LearningLoopTests(unittest.TestCase):
         actors = {e['actor'] for e in Brain(self.root / 'vault', self.root / 'state').ledger.entries()
                   if e['phase'] == 'intent'}
         self.assertEqual(actors, {'human:local', 'agent:reviewer'})
+        models = {e.get('agent_model') for e in Brain(self.root / 'vault', self.root / 'state').ledger.entries()
+                  if e['phase'] == 'intent' and e['actor'] == 'agent:reviewer'}
+        self.assertEqual(models, {'fake-llm'})
+
+    def test_skill_configs_accept_any_task_id(self):
+        tasks = self.root / 'evals' / 'tasks'
+        shutil.copytree(FIXTURES / 'tasks', tasks)
+        shutil.copytree(FIXTURES / 'workspace', self.root / 'evals' / 'workspace')
+        task = json.loads((tasks / 'skill.json').read_text(encoding='utf-8'))
+        (tasks / 'skill.json').write_text(json.dumps({**task, 'id': 'копия файла 1'}), encoding='utf-8')
+        self.cli('eval-lock', str(tasks))
+        agent = self.write('agent.json', [sys.executable, str(FIXTURES / 'fake_agent.py'), '--prompt', '{prompt}',
+                                          '--workspace', '{workspace}'])
+        result = self.cli('eval-run', '--tasks', str(tasks), '--config', 'B', '--model', 'qwen-small', '--agent', str(agent))
+        self.assertEqual(result['tasks'], 1)
 
 
 if __name__ == '__main__':
