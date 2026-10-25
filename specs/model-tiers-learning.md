@@ -55,7 +55,8 @@
 4. **Точный дедуп (S3).** Fingerprint = sha256 нормализованных `title + body +
    sorted(source_ids)` (без frontmatter). Повтор возвращает существующий id и
    `dedup: true`. Существующий `reviewed` никогда не перезаписывается.
-5. **Шлюз записи.** Черновик опыта (`type: experience|skill`) без `source_ids`,
+5. **Шлюз записи.** Черновик опыта (`memory_type: experience|skill` в frontmatter; тип заметки
+   остаётся `note`, чтобы не менять типы в интерфейсе) без `source_ids`,
    `applies_to` (область применимости) и `evidence` (как проверено) отклоняется с
    понятной ошибкой. Ошибку видит модель и может исправить запрос.
 6. **Журнал полезности выдачи.** Каждый `search_knowledge/get_document` пишет
