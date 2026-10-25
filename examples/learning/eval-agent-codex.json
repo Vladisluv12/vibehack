@@ -1,0 +1,2 @@
+["python3", "-m", "second_brain.usage_adapter", "--format", "codex", "--",
+ "codex", "exec", "--json", "--skip-git-repo-check", "-s", "workspace-write", "{prompt}"]

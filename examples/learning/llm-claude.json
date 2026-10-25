@@ -1,0 +1,2 @@
+["claude", "-p", "--model", "haiku", "--no-session-persistence", "--permission-mode", "default",
+ "--disallowedTools", "Bash,Write,Edit,WebFetch,WebSearch,Task"]

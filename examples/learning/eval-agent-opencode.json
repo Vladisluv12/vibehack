@@ -1,0 +1,2 @@
+["python3", "-m", "second_brain.usage_adapter", "--format", "opencode", "--",
+ "opencode", "run", "--format", "json", "--model", "opencode/mimo-v2.6-flash-free", "{prompt}"]

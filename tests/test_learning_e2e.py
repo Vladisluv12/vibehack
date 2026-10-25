@@ -45,7 +45,7 @@ class LearningLoopTests(unittest.TestCase):
             except SystemExit as exc:
                 got = exc.code
         self.assertEqual(got, code, out.getvalue())
-        return json.loads(out.getvalue())
+        return json.loads(out.getvalue()) if out.getvalue().strip() else None
 
     def write(self, name, data):
         path = self.root / name
@@ -113,9 +113,11 @@ class LearningLoopTests(unittest.TestCase):
         mechanisms = {(m['name'], m['enabled'], m['actor']) for m in self.cli('mechanism')}
         self.assertEqual(mechanisms, {('reflection', 1, 'human:cli'), ('skills', 1, 'human:cli')})
         # Mismatched pairs are refused outright (exit 1 with the error), without touching switches.
-        with self.assertRaises(ValueError):
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
             self.cli('eval-decide', '--baseline', a['batch_id'], '--candidate', b['batch_id'],
-                     '--tier', 'weak', '--mechanism', 'reflection')
+                     '--tier', 'weak', '--mechanism', 'reflection', code=2)
+        self.assertTrue(err.getvalue().startswith('second_brain: '))
         self.cli('promote', '--skill', skill, '--stage', 'off')  # the human withdraws the skill
         c2 = self.cli('eval-run', '--tasks', str(tasks), '--config', 'C', '--model', 'qwen-small', '--agent', str(agent))
         no_gain = self.cli('eval-decide', '--baseline', b['batch_id'], '--candidate', c2['batch_id'],

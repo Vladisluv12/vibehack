@@ -3,6 +3,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import sys
 
 from .brain import Brain, restore_backup
 from .github import import_github
@@ -41,6 +42,15 @@ def parser():
 
 
 def main(argv=None):
+    """Refused input is a one-line message and exit code 2 (lint findings exit 1)."""
+    try:
+        return _main(argv)
+    except ValueError as exc:  # includes LedgerCorrupt and JSON decode errors
+        print(f'second_brain: {exc}', file=sys.stderr)
+        raise SystemExit(2) from None
+
+
+def _main(argv=None):
     args = parser().parse_args(argv)
     if args.cmd == 'restore':
         return print(json.dumps(restore_backup(args.archive, args.destination), ensure_ascii=False, indent=2))
