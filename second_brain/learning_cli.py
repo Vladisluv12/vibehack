@@ -62,7 +62,9 @@ def run(args):
     brain = None
     try:
         if args.cmd in ('lint', 'review', 'skill-pack', 'eval-run'):
-            brain = Brain(args.vault, args.state, actor='agent:reviewer' if args.cmd == 'review' else 'human:local')
+            reviewer_meta = {'agent_model': args.llm.stem} if args.cmd == 'review' else None
+            brain = Brain(args.vault, args.state, actor='agent:reviewer' if args.cmd == 'review' else 'human:local',
+                          actor_meta=reviewer_meta)
             brain.sync()
         if args.cmd == 'lint':
             report = lint.lint(brain, online=args.online)

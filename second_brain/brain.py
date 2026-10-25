@@ -140,7 +140,7 @@ def without_fences(body):
 
 
 class Brain:
-    def __init__(self, vault: Path, state: Path, actor: str = 'human:local'):
+    def __init__(self, vault: Path, state: Path, actor: str = 'human:local', actor_meta: dict | None = None):
         if vault.is_symlink():
             raise ValueError("Vault cannot be a symlink")
         self.vault = vault.absolute()
@@ -158,6 +158,7 @@ class Brain:
         CREATE VIRTUAL TABLE IF NOT EXISTS search USING fts5(id UNINDEXED,title,body, tokenize='unicode61');
         """)
         self.actor = actor
+        self.actor_meta = dict(actor_meta or {})  # e.g. agent_model and tier, recorded with each change
         self.ledger = Ledger(state)
         with self.lock():
             self.ledger.recover(self._current)
@@ -170,7 +171,9 @@ class Brain:
 
     def _write(self, rel, before, after, op, note_id, reason=''):
         """Every note change goes through the ledger; no intent on disk, no change."""
-        with self.ledger.mutation(op, rel, self.actor, before, after, note_id=note_id, reason=reason):
+        self.ledger.recover(self._current)
+        with self.ledger.mutation(op, rel, self.actor, before, after, self._current, note_id=note_id,
+                                  reason=reason, meta=self.actor_meta):
             atomic_write(self.safe(rel), after)
 
     def rollback(self, *, op_id=None, actor=None):
@@ -183,6 +186,7 @@ class Brain:
             raise ValueError('Rollback needs exactly one of op_id or actor')
         undone, conflicts = [], []
         with self.lock():
+            self.ledger.recover(self._current)
             for entry in reversed(self.ledger.committed()):
                 if (op_id and entry['op_id'] != op_id) or (actor and entry['actor'] != actor):
                     continue
@@ -191,8 +195,8 @@ class Brain:
                     conflicts.append({'op_id': entry['op_id'], 'path': entry['path'], 'error': 'changed since'})
                     continue
                 before = self.ledger.before_text(entry)
-                with self.ledger.mutation('rollback', entry['path'], self.actor, current, before,
-                                          note_id=entry['note_id'], target_op=entry['op_id']):
+                with self.ledger.mutation('rollback', entry['path'], self.actor, current, before, self._current,
+                                          note_id=entry['note_id'], target_op=entry['op_id'], meta=self.actor_meta):
                     if before is None:
                         parked = self.safe(f"Versions/{entry['note_id'] or 'unknown'}/rolled-back-{entry['sha256_after']}.md")
                         atomic_write(parked, current)

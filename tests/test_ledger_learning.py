@@ -56,6 +56,59 @@ class LedgerTests(unittest.TestCase):
         recovered = [e for e in self.brain.ledger.entries() if e.get('recovered')]
         self.assertEqual(recovered[0]['phase'], 'commit')
 
+    def test_torn_line_does_not_swallow_the_next_intent(self):
+        self.brain.create('Первая', 'текст')
+        with open(self.brain.ledger.path, 'a', encoding='utf-8') as stream:
+            stream.write('{"op_id": "torn", "phase": "int')  # crash in the middle of an intent
+        second = self.brain.create('Вторая', 'текст')
+        intents = [e for e in self.brain.ledger.entries() if e['phase'] == 'intent']
+        self.assertEqual([e['note_id'] for e in intents][-1], second)
+        self.assertEqual(self.brain.ledger.pending(), [])
+
+    def test_failure_after_the_file_landed_is_a_commit(self):
+        ident = self.brain.create('Заметка', 'текст'); self.brain.sync()
+        note = self.brain.get(ident)
+        real = __import__('second_brain.brain', fromlist=['atomic_write']).atomic_write
+
+        def write_then_die(path, text):
+            real(path, text)
+            if 'Versions' not in path.parts:
+                raise KeyboardInterrupt
+        with mock.patch('second_brain.brain.atomic_write', side_effect=write_then_die):
+            with self.assertRaises(KeyboardInterrupt):
+                self.brain.edit(ident, note['content'] + '\nправка', note['hash'])
+        last = self.brain.ledger.entries()[-1]
+        self.assertEqual((last['phase'], last.get('after_error')), ('commit', True))
+        self.assertEqual(len(self.brain.rollback(actor='agent:weak-1')['undone']), 2)
+
+    def test_open_intent_of_a_dead_writer_is_settled_before_the_next_write(self):
+        other = Brain(self.root/'vault', self.root/'state', actor='agent:other')
+        ident = self.brain.create('Заметка', 'текст'); self.brain.sync()
+        note = self.brain.get(ident)
+        real = self.brain.ledger._append
+
+        def die_before_commit(entry):
+            if entry['phase'] == 'commit':
+                raise SystemExit  # the process holding the change dies here
+            real(entry)
+        with mock.patch.object(self.brain.ledger, '_append', side_effect=die_before_commit):
+            with self.assertRaises(SystemExit):
+                self.brain.edit(ident, note['content'] + '\nпервая', note['hash'])
+        other.sync()
+        current = other.get(ident)
+        other.edit(ident, current['content'] + '\nвторая', current['hash'])
+        settled = [e for e in other.ledger.entries() if e.get('recovered')]
+        self.assertEqual([e['phase'] for e in settled], ['commit'])
+        other.close()
+
+    def test_agent_model_and_tier_are_journaled(self):
+        brain = Brain(self.root/'vault', self.root/'state', actor='agent:qwen',
+                      actor_meta={'agent_model': 'qwen', 'tier': 'weak'})
+        brain.create('Заметка', 'текст')
+        intent = [e for e in brain.ledger.entries() if e['phase'] == 'intent'][-1]
+        self.assertEqual((intent['agent_model'], intent['tier']), ('qwen', 'weak'))
+        brain.close()
+
     def test_rollback_by_actor_restores_and_parks_created_notes(self):
         human = Brain(self.root/'vault', self.root/'state', actor='human:local')
         keep = human.create('Человек', 'исходный текст'); human.sync()

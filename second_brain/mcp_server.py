@@ -95,7 +95,8 @@ def build(vault: Path, state: Path, agent_model: str = ''):
 
     @contextmanager
     def open_vault():
-        brain = Brain(vault, state, actor=f'agent:{agent_model or "unknown"}')
+        brain = Brain(vault, state, actor=f'agent:{agent_model or "unknown"}',
+                      actor_meta={'agent_model': agent_model, 'tier': tier})
         try:
             brain.sync()
             yield brain
