@@ -6,6 +6,7 @@ import shutil
 
 from .brain import Brain, restore_backup
 from .github import import_github
+from .learning import MECHANISMS, TIERS, Learning
 
 DEMO = Path(__file__).resolve().parent.parent / 'examples' / 'demo-vault'
 SHOWCASE = DEMO.parent / 'showcase-vault'
@@ -28,6 +29,10 @@ def parser():
     c = cmds.add_parser('demo', help='Copy the synthetic demo vault into --vault if it does not exist')
     c.add_argument('--showcase', action='store_true', help='Larger, densely linked vault for presentations')
     c = cmds.add_parser('serve'); c.add_argument('--port', type=int, default=8765)
+    c = cmds.add_parser('mechanism', help='Show or switch learning mechanisms per tier (a human decision)')
+    c.add_argument('--tier', choices=TIERS); c.add_argument('--name', choices=MECHANISMS)
+    g = c.add_mutually_exclusive_group(); g.add_argument('--on', action='store_true'); g.add_argument('--off', action='store_true')
+    c.add_argument('--reason', default='')
     c = cmds.add_parser('mcp', help='STDIO MCP gateway (requires fastmcp)')
     c.add_argument('--agent-model', default='', help='Model id of the connecting agent; tier comes from state/agents.json')
     return p
@@ -51,6 +56,17 @@ def main(argv=None):
     if args.cmd == 'mcp':
         from .mcp_server import run
         return run(args.vault, args.state, args.agent_model)
+    if args.cmd == 'mechanism':
+        learning = Learning(args.state)
+        try:
+            if args.on or args.off:
+                if not (args.tier and args.name and args.reason.strip()):
+                    raise SystemExit('mechanism --on/--off needs --tier, --name and --reason')
+                learning.set_mechanism(args.tier, args.name, args.on, args.reason, 'human:cli')
+            result = learning.mechanisms()
+        finally:
+            learning.close()
+        return print(json.dumps(result, ensure_ascii=False, indent=2))
     brain = Brain(args.vault, args.state)
     try:
         result = brain.sync()

@@ -127,5 +127,21 @@ class TierTests(unittest.TestCase):
         self.assertNotEqual(a, c)
 
 
+class CliTests(unittest.TestCase):
+    def test_mechanism_switch_needs_reason_and_records_human(self):
+        import contextlib, io
+        from second_brain.cli import main
+        with tempfile.TemporaryDirectory() as temp:
+            base = ['--vault', f'{temp}/v', '--state', f'{temp}/s', 'mechanism']
+            with self.assertRaises(SystemExit):
+                main(base + ['--tier', 'weak', '--name', 'skills', '--on'])
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                main(base + ['--tier', 'weak', '--name', 'skills', '--on', '--reason', 'A/B batch 3: +12%'])
+            rows = json.loads(out.getvalue())
+            self.assertEqual([(r['tier'], r['name'], r['enabled'], r['actor']) for r in rows],
+                             [('weak', 'skills', 1, 'human:cli')])
+
+
 if __name__ == '__main__':
     unittest.main()
