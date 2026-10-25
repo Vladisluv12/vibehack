@@ -21,8 +21,9 @@ class ReflectionTests(unittest.TestCase):
         self.learning.set_mechanism('weak', mechanism, True, 'fixture', 'human:test')
 
     def run_event(self, run_id='r1', **extra):
-        return ingest_run(self.learning, dict(run_id=run_id, agent_model='small',
-                                             task='build project', outcome='success') | extra)
+        event = dict(run_id=run_id, agent_model='small',
+                                             task='build project', outcome='success') | extra
+        return ingest_run(self.learning, event, event.get('agent_model', ''))
 
     def test_individual_triggers_and_threshold(self):
         self.enable()
@@ -138,6 +139,36 @@ class ReflectionTests(unittest.TestCase):
         self.assertEqual(repeated_error_rate(self.learning, 'small'), 1 / 3)
         self.assertEqual(repeated_error_rate(self.learning, 'large'), 1.0)
         self.assertEqual(repeated_error_rate(self.learning, 'missing'), 0.0)
+
+
+class HostIdentityTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        state = Path(self.temp.name)
+        (state / 'agents.json').write_text(json.dumps({'models': {'small': 'weak'}}))
+        self.learning = Learning(state)
+        self.learning.set_mechanism('weak', 'reflection', True, 'fixture', 'human:test')
+
+    def tearDown(self):
+        self.learning.close()
+        self.temp.cleanup()
+
+    def test_event_cannot_claim_another_model(self):
+        with self.assertRaises(ValueError):
+            ingest_run(self.learning, {'run_id': 'r1', 'agent_model': 'small', 'outcome': 'success'}, 'big')
+        result = ingest_run(self.learning, {'run_id': 'r1', 'outcome': 'success', 'user_correction': True}, 'big')
+        self.assertEqual((result['tier'], result['triggers']), ('frontier', []))
+        with self.assertRaises(ValueError):
+            ingest_run(self.learning, {'run_id': 'r2', 'outcome': 'success'}, '')
+
+    def test_service_runs_are_not_experience(self):
+        error = 'AssertionError: answer differs'
+        ingest_run(self.learning, {'run_id': 'e1', 'origin': 'eval', 'outcome': 'failure', 'errors': [error]}, 'small')
+        ingest_run(self.learning, {'run_id': 'v1', 'origin': 'reviewer', 'outcome': 'failure', 'errors': [error]}, 'small')
+        first = ingest_run(self.learning, {'run_id': 'a1', 'outcome': 'success', 'errors': [error]}, 'small')
+        self.assertNotIn('repeated_error', first['triggers'])
+        ingest_run(self.learning, {'run_id': 'a2', 'outcome': 'failure', 'errors': [error]}, 'small')
+        self.assertEqual(repeated_error_rate(self.learning), 1.0)  # a2 repeats a1, not the eval run
 
 
 if __name__ == '__main__':

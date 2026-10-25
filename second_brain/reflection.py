@@ -58,16 +58,22 @@ def _trigger(learning, run_id, event, tier, now):
                         (run_id, event, tier, now))
 
 
-def ingest_run(learning, event: dict) -> dict:
+def ingest_run(learning, event: dict, agent_model: str) -> dict:
     """Store one bounded summary and its signatures, atomically with its triggers.
 
     Earlier means ingestion order, including when clock timestamps tie or regress.
     Unknown keys (including tier, transcript and reasoning) are always discarded.
     Returns the stored tier and trigger names; dedup means this ID already existed.
     """
-    data = _clean_event(event)
-    # Resolve the host's exact model ID before redaction/truncation of stored text.
-    tier = learning.tier(event.get('agent_model', ''))
+    # The host that ran the agent names the model; the event cannot choose its own tier.
+    if not isinstance(agent_model, str) or not agent_model.strip():
+        raise ValueError('ingest_run needs the host-attested agent_model')
+    if not isinstance(event, dict):
+        raise ValueError('A run must be an object')
+    if event.get('agent_model', agent_model) != agent_model:
+        raise ValueError('Event names a different agent_model than the host')
+    data = _clean_event({**event, 'agent_model': agent_model})
+    tier = learning.tier(agent_model)
     run_id = data['run_id']
     now = time.time()
     signatures = {error_signature(error) for error in data['errors']}
@@ -78,8 +84,10 @@ def ingest_run(learning, event: dict) -> dict:
                                         data['outcome'], data['steps'],
                                         json.dumps(data, ensure_ascii=False), now)).rowcount
         if inserted:
+            # Only earlier agent runs count: reviewer and eval failures are not experience.
             repeated = any(learning.db.execute(
-                'SELECT 1 FROM signatures WHERE signature=? LIMIT 1', (signature,)
+                "SELECT 1 FROM signatures s JOIN runs r ON r.run_id=s.run_id "
+                "WHERE s.signature=? AND r.origin='agent' LIMIT 1", (signature,)
             ).fetchone() for signature in signatures)
             learning.db.executemany('''INSERT INTO signatures
                 (signature, run_id, outcome, ts) VALUES (?,?,?,?)''',
@@ -136,8 +144,8 @@ def repeated_error_rate(learning, model=None):
         SELECT 1 FROM signatures current
         JOIN signatures previous ON previous.signature=current.signature
         JOIN runs earlier ON earlier.run_id=previous.run_id
-        WHERE current.run_id=r.run_id AND earlier.rowid < r.rowid
+        WHERE current.run_id=r.run_id AND earlier.rowid < r.rowid AND earlier.origin='agent'
     )), 0) AS repeated FROM runs r
-    WHERE r.outcome='failure' AND (? IS NULL OR r.agent_model=?)''',
+    WHERE r.outcome='failure' AND r.origin='agent' AND (? IS NULL OR r.agent_model=?)''',
                               (model, clean_text(model, 200) if model is not None else None)).fetchone()
     return row['repeated'] / row['failed'] if row['failed'] else 0.0

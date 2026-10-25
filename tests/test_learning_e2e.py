@@ -58,17 +58,17 @@ class LearningLoopTests(unittest.TestCase):
         brain.sync(); brain.close()
         self.cli('mechanism', '--tier', 'weak', '--name', 'reflection', '--on', '--reason', 'pilot')
         error = 'Traceback\n  File "/tmp/w1/check.py", line 4\nAssertionError: answer.txt differs'
-        first = self.cli('ingest-run', str(self.write('r1.json', {
+        first = self.cli('ingest-run', '--model', 'qwen-small', str(self.write('r1.json', {
             'run_id': 'r1', 'agent_model': 'qwen-small', 'task': 'copy a file', 'outcome': 'failure',
             'errors': [error], 'transcript': 'must be dropped'})))
         self.assertEqual(first[0]['triggers'], [])
-        second = self.cli('ingest-run', str(self.write('r2.json', {
+        second = self.cli('ingest-run', '--model', 'qwen-small', str(self.write('r2.json', {
             'run_id': 'r2', 'agent_model': 'qwen-small', 'task': 'copy a file using the evaluated skill',
             'outcome': 'success', 'steps': 3, 'errors': [error.replace('/tmp/w1', '/tmp/w2')],
             'contradicts': [old]})))
         self.assertEqual(second[0]['tier'], 'weak')
         self.assertEqual(set(second[0]['triggers']), {'repeated_error', 'contradiction'})
-        frontier = self.cli('ingest-run', str(self.write('r3.json', {
+        frontier = self.cli('ingest-run', '--model', 'claude-opus-5-5', str(self.write('r3.json', {
             'run_id': 'r3', 'agent_model': 'claude-opus-5-5', 'task': 'copy', 'outcome': 'success',
             'steps': 2, 'user_correction': True})))
         self.assertEqual((frontier[0]['tier'], frontier[0]['triggers']), ('frontier', []))

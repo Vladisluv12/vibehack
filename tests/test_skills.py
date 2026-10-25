@@ -102,7 +102,7 @@ class SkillsTests(unittest.TestCase):
         self.enable()
         ident = self.skill()
         promote(self.learning, ident, 'full', 'human:test')
-        ingest_run(self.learning, {'run_id': 'run', 'agent_model': 'small', 'task': 'build', 'outcome': 'success'})
+        ingest_run(self.learning, {'run_id': 'run', 'agent_model': 'small', 'task': 'build', 'outcome': 'success'}, 'small')
         self.pack(budget_chars=10)
         self.assertEqual(self.learning.db.execute('SELECT count(*) FROM served').fetchone()[0], 0)
         self.pack()
@@ -164,7 +164,7 @@ class SkillsTests(unittest.TestCase):
                 ('garden', False, 'failure'), ('garden', False, 'failure')]
         for i, (task, used, outcome) in enumerate(rows):
             ingest_run(self.learning, {'run_id': str(i), 'task': task, 'outcome': outcome,
-                                      'skills_used': [ident] if used else []})
+                                      'skills_used': [ident] if used else []}, 'small')
         result = canary_compare(self.learning, ident)
         self.assertEqual(result['tasks'], ['build'])
         self.assertEqual(result['with_skill'], {'count': 3, 'successes': 2, 'success_rate': 2 / 3})

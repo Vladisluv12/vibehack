@@ -20,6 +20,7 @@ def add_commands(cmds):
     c.add_argument('--online', action='store_true', help='Also request http(s) sources (network)')
     c = cmds.add_parser('ingest-run', help='Store a redacted agent run summary (JSON object or list)')
     c.add_argument('path', type=Path)
+    c.add_argument('--model', required=True, help='Model the host actually ran; decides the tier')
     c = cmds.add_parser('reflect-request', help='Queue reflection for one run on demand'); c.add_argument('run_id')
     c = cmds.add_parser('review', help='Process pending reflection triggers with an external model')
     c.add_argument('--llm', type=Path, required=True, help='JSON argv of a model CLI that reads the prompt on stdin')
@@ -71,7 +72,7 @@ def run(args):
             return report, lint.exit_code(report)
         if args.cmd == 'ingest-run':
             data = json.loads(args.path.read_text(encoding='utf-8'))
-            return [reflection.ingest_run(learning, e) for e in (data if isinstance(data, list) else [data])], 0
+            return [reflection.ingest_run(learning, e, args.model) for e in (data if isinstance(data, list) else [data])], 0
         if args.cmd == 'reflect-request':
             return reflection.request_reflection(learning, args.run_id), 0
         if args.cmd == 'review':

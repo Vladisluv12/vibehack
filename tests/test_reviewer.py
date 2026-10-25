@@ -29,9 +29,10 @@ class ReviewerTests(unittest.TestCase):
         self.prompts = []
 
     def run_event(self, run_id='r1', **extra):
-        return ingest_run(self.learning, dict(run_id=run_id, agent_model='small', outcome='success',
+        event = dict(run_id=run_id, agent_model='small', outcome='success',
                                              task='build', user_correction=True,
-                                             skills_used=[self.source]) | extra)
+                                             skills_used=[self.source]) | extra
+        return ingest_run(self.learning, event, event.get('agent_model', ''))
 
     def decision(self, **extra):
         return json.dumps(dict(action='add', title='Build procedure', body='Run the checked build steps.',
