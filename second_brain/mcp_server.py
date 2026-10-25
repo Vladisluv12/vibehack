@@ -6,7 +6,28 @@ deletes, canonical edits, status promotion or executable document content.
 from contextlib import contextmanager
 from pathlib import Path
 
-from .brain import Brain
+from .brain import LINK, Brain, without_fences
+
+MAX_PROPOSED_LINKS = 50
+
+
+def create_draft(brain, title, content, source_ids):
+    """Agent draft: cited sources become declared edges; wiki links in the text are
+    only suggestions, so an unreviewed draft cannot assert graph relations."""
+    if not isinstance(content, str) or len(content) > 100000 or not isinstance(source_ids, list) or len(source_ids) > 30:
+        raise ValueError('Draft exceeds size limit')
+    for ident in source_ids:
+        brain.get(ident)
+    suggested = []
+    for found in LINK.finditer(without_fences(content)):
+        target = found[1].split('|')[0].split('#')[0].strip()[:200]
+        if target and target not in suggested:
+            suggested.append(target)
+    extra = {'proposed_links': suggested[:MAX_PROPOSED_LINKS]} if suggested else None
+    ident = brain.create(title, content, kind='note', review='proposed', source='agent:second-brain-mcp',
+                         links=source_ids, declared_only=True, extra=extra)
+    brain.sync()
+    return {'id': ident, 'review': 'proposed', 'proposed_links': suggested[:MAX_PROPOSED_LINKS]}
 
 
 def build(vault: Path, state: Path):
@@ -51,14 +72,8 @@ def build(vault: Path, state: Path):
     @mcp.tool(annotations={'readOnlyHint': False, 'destructiveHint': False, 'openWorldHint': False})
     def create_draft(title: str, content: str, source_ids: list[str]) -> dict:
         """Create a new proposed note with citations. Cannot edit or approve existing notes."""
-        if len(content) > 100000 or len(source_ids) > 30:
-            raise ValueError('Draft exceeds size limit')
         with open_vault() as b:
-            for ident in source_ids:
-                b.get(ident)
-            ident = b.create(title, content, kind='note', review='proposed', source='agent:second-brain-mcp', links=source_ids)
-            b.sync()
-            return {'id': ident, 'review': 'proposed'}
+            return create_draft(b, title, content, source_ids)
 
     return mcp
 
