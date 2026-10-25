@@ -25,6 +25,7 @@ except ImportError:  # Windows
     fcntl = None
     import msvcrt
 
+from .ledger import Ledger
 from .redact import redact
 
 LOCK_NAME = ".second-brain.lock"
@@ -139,7 +140,7 @@ def without_fences(body):
 
 
 class Brain:
-    def __init__(self, vault: Path, state: Path):
+    def __init__(self, vault: Path, state: Path, actor: str = 'human:local'):
         if vault.is_symlink():
             raise ValueError("Vault cannot be a symlink")
         self.vault = vault.absolute()
@@ -156,6 +157,51 @@ class Brain:
           PRIMARY KEY(source,target,relation));
         CREATE VIRTUAL TABLE IF NOT EXISTS search USING fts5(id UNINDEXED,title,body, tokenize='unicode61');
         """)
+        self.actor = actor
+        self.ledger = Ledger(state)
+        with self.lock():
+            self.ledger.recover(self._current)
+
+    def _current(self, rel):
+        try:
+            return self._read(self.safe(rel))
+        except (OSError, ValueError):
+            return None
+
+    def _write(self, rel, before, after, op, note_id, reason=''):
+        """Every note change goes through the ledger; no intent on disk, no change."""
+        with self.ledger.mutation(op, rel, self.actor, before, after, note_id=note_id, reason=reason):
+            atomic_write(self.safe(rel), after)
+
+    def rollback(self, *, op_id=None, actor=None):
+        """Undo committed changes (newest first) selected by op id or actor.
+
+        A change edited again afterwards is reported, not overwritten. Undoing a
+        creation moves the note to Versions/, never deletes it.
+        """
+        if bool(op_id) == bool(actor):
+            raise ValueError('Rollback needs exactly one of op_id or actor')
+        undone, conflicts = [], []
+        with self.lock():
+            for entry in reversed(self.ledger.committed()):
+                if (op_id and entry['op_id'] != op_id) or (actor and entry['actor'] != actor):
+                    continue
+                current = self._current(entry['path'])
+                if (digest(current) if current is not None else None) != entry['sha256_after']:
+                    conflicts.append({'op_id': entry['op_id'], 'path': entry['path'], 'error': 'changed since'})
+                    continue
+                before = self.ledger.before_text(entry)
+                with self.ledger.mutation('rollback', entry['path'], self.actor, current, before,
+                                          note_id=entry['note_id'], target_op=entry['op_id']):
+                    if before is None:
+                        parked = self.safe(f"Versions/{entry['note_id'] or 'unknown'}/rolled-back-{entry['sha256_after']}.md")
+                        atomic_write(parked, current)
+                        self.safe(entry['path']).unlink()
+                    else:
+                        atomic_write(self.safe(entry['path']), before)
+                undone.append(entry['op_id'])
+        self.sync()
+        return {'undone': undone, 'conflicts': conflicts}
 
     def close(self):
         self.db.close()
@@ -365,7 +411,7 @@ class Brain:
                     except (OSError,ValueError):
                         continue
             if not path.exists():
-                atomic_write(path, text)
+                self._write(rel, None, text, 'create', ident)
         return ident
 
     def edit(self, ident, content, expected_hash):
@@ -385,7 +431,7 @@ class Brain:
             version = self.safe(f'Versions/{ident}/{expected_hash}.md')
             if not version.exists():
                 atomic_write(version, before)
-            atomic_write(path, content)
+            self._write(row['path'], before, content, 'edit', ident)
         self.sync()
         return self.get(ident)
 

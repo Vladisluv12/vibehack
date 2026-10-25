@@ -22,6 +22,8 @@ def parser():
     c = cmds.add_parser('import'); c.add_argument('path', type=Path); c.add_argument('--split', action='store_true')
     c = cmds.add_parser('import-github', help='Import Markdown files of a GitHub repository (needs network)'); c.add_argument('url')
     cmds.add_parser('backup')
+    c = cmds.add_parser('rollback', help='Undo journaled changes by op id or actor (e.g. agent:qwen3.8-flash)')
+    g = c.add_mutually_exclusive_group(required=True); g.add_argument('--op-id'); g.add_argument('--actor')
     c = cmds.add_parser('restore'); c.add_argument('archive', type=Path); c.add_argument('destination', type=Path)
     c = cmds.add_parser('demo', help='Copy the synthetic demo vault into --vault if it does not exist')
     c.add_argument('--showcase', action='store_true', help='Larger, densely linked vault for presentations')
@@ -56,6 +58,7 @@ def main(argv=None):
         elif args.cmd == 'import': result = brain.import_markdown(args.path, split=args.split)
         elif args.cmd == 'import-github': result = import_github(brain, args.url)
         elif args.cmd == 'backup': result = brain.backup()
+        elif args.cmd == 'rollback': result = brain.rollback(op_id=args.op_id, actor=args.actor)
         if args.cmd in ('import', 'import-github'):
             brain.sync()
     finally:
